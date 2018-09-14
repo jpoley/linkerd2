@@ -194,7 +194,6 @@ class Sidebar extends React.Component {
             <Menu.Item className="sidebar-menu-item" key="/tap">
               <PrefixedLink to="/tap">
                 <i className="fas fa-microscope" />
-                &nbsp;&nbsp;&nbsp;
                 <span>Tap</span>
               </PrefixedLink>
             </Menu.Item>
@@ -202,7 +201,6 @@ class Sidebar extends React.Component {
             <Menu.Item className="sidebar-menu-item" key="/top">
               <PrefixedLink to="/top">
                 <i className="fas fa-stream" />
-                &nbsp;&nbsp;&nbsp;
                 <span>Top</span>
               </PrefixedLink>
             </Menu.Item>
