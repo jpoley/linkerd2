@@ -25,6 +25,9 @@ rules:
 - apiGroups: [""]
   resources: ["pods", "endpoints", "services", "namespaces", "replicationcontrollers"]
   verbs: ["list", "get", "watch"]
+- apiGroups: ["linkerd.io"]
+  resources: ["serviceprofiles"]
+  verbs: ["list", "get", "watch"]
 
 ---
 kind: ClusterRoleBinding
@@ -142,6 +145,7 @@ spec:
         - public-api
         - -prometheus-url=http://prometheus.linkerd.svc.cluster.local:9090
         - -controller-namespace=linkerd
+        - -single-namespace=false
         - -log-level=info
         image: gcr.io/linkerd-io/controller:undefined
         imagePullPolicy: IfNotPresent
@@ -163,31 +167,11 @@ spec:
             port: 9995
         resources: {}
       - args:
-        - destination
-        - -enable-tls=false
-        - -log-level=info
-        image: gcr.io/linkerd-io/controller:undefined
-        imagePullPolicy: IfNotPresent
-        livenessProbe:
-          httpGet:
-            path: /ping
-            port: 9999
-          initialDelaySeconds: 10
-        name: destination
-        ports:
-        - containerPort: 8089
-          name: grpc
-        - containerPort: 9999
-          name: admin-http
-        readinessProbe:
-          failureThreshold: 7
-          httpGet:
-            path: /ready
-            port: 9999
-        resources: {}
-      - args:
         - proxy-api
         - -addr=:8086
+        - -controller-namespace=linkerd
+        - -single-namespace=false
+        - -enable-tls=false
         - -log-level=info
         image: gcr.io/linkerd-io/controller:undefined
         imagePullPolicy: IfNotPresent
@@ -210,8 +194,9 @@ spec:
         resources: {}
       - args:
         - tap
-        - -log-level=info
         - -controller-namespace=linkerd
+        - -single-namespace=false
+        - -log-level=info
         image: gcr.io/linkerd-io/controller:undefined
         imagePullPolicy: IfNotPresent
         livenessProbe:
@@ -242,9 +227,9 @@ spec:
           value: tcp://0.0.0.0:4190
         - name: LINKERD2_PROXY_METRICS_LISTENER
           value: tcp://0.0.0.0:4191
-        - name: LINKERD2_PROXY_PRIVATE_LISTENER
+        - name: LINKERD2_PROXY_OUTBOUND_LISTENER
           value: tcp://127.0.0.1:4140
-        - name: LINKERD2_PROXY_PUBLIC_LISTENER
+        - name: LINKERD2_PROXY_INBOUND_LISTENER
           value: tcp://0.0.0.0:4143
         - name: LINKERD2_PROXY_POD_NAMESPACE
           valueFrom:
@@ -295,6 +280,26 @@ spec:
       serviceAccount: linkerd-controller
 status: {}
 ---
+apiVersion: apiextensions.k8s.io/v1beta1
+kind: CustomResourceDefinition
+metadata:
+  name: serviceprofiles.linkerd.io
+  namespace: linkerd
+  annotations:
+    linkerd.io/created-by: linkerd/cli undefined
+spec:
+  group: linkerd.io
+  version: v1alpha1
+  scope: Namespaced
+  names:
+    plural: serviceprofiles
+    singular: serviceprofile
+    kind: ServiceProfile
+    shortNames:
+    - sp
+
+### Web ###
+---
 kind: Service
 apiVersion: v1
 metadata:
@@ -344,8 +349,6 @@ spec:
       containers:
       - args:
         - -api-addr=api.linkerd.svc.cluster.local:8085
-        - -static-dir=/dist
-        - -template-dir=/templates
         - -uuid=deaab91a-f4ab-448a-b7d1-c832a2fa0a60
         - -controller-namespace=linkerd
         - -log-level=info
@@ -379,9 +382,9 @@ spec:
           value: tcp://0.0.0.0:4190
         - name: LINKERD2_PROXY_METRICS_LISTENER
           value: tcp://0.0.0.0:4191
-        - name: LINKERD2_PROXY_PRIVATE_LISTENER
+        - name: LINKERD2_PROXY_OUTBOUND_LISTENER
           value: tcp://127.0.0.1:4140
-        - name: LINKERD2_PROXY_PUBLIC_LISTENER
+        - name: LINKERD2_PROXY_INBOUND_LISTENER
           value: tcp://0.0.0.0:4143
         - name: LINKERD2_PROXY_POD_NAMESPACE
           valueFrom:
@@ -512,9 +515,9 @@ spec:
           value: tcp://0.0.0.0:4190
         - name: LINKERD2_PROXY_METRICS_LISTENER
           value: tcp://0.0.0.0:4191
-        - name: LINKERD2_PROXY_PRIVATE_LISTENER
+        - name: LINKERD2_PROXY_OUTBOUND_LISTENER
           value: tcp://127.0.0.1:4140
-        - name: LINKERD2_PROXY_PUBLIC_LISTENER
+        - name: LINKERD2_PROXY_INBOUND_LISTENER
           value: tcp://0.0.0.0:4143
         - name: LINKERD2_PROXY_POD_NAMESPACE
           valueFrom:
@@ -733,9 +736,9 @@ spec:
           value: tcp://0.0.0.0:4190
         - name: LINKERD2_PROXY_METRICS_LISTENER
           value: tcp://0.0.0.0:4191
-        - name: LINKERD2_PROXY_PRIVATE_LISTENER
+        - name: LINKERD2_PROXY_OUTBOUND_LISTENER
           value: tcp://127.0.0.1:4140
-        - name: LINKERD2_PROXY_PUBLIC_LISTENER
+        - name: LINKERD2_PROXY_INBOUND_LISTENER
           value: tcp://0.0.0.0:4143
         - name: LINKERD2_PROXY_POD_NAMESPACE
           valueFrom:

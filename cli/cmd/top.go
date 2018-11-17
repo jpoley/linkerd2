@@ -51,6 +51,7 @@ func (id topRequestID) String() string {
 
 type tableRow struct {
 	by          string
+	method      string
 	source      string
 	destination string
 	count       int
@@ -64,8 +65,8 @@ type tableRow struct {
 const headerHeight = 3
 
 var (
-	columnNames  = []string{"Source", "Destination", "Path", "Count", "Best", "Worst", "Last", "Success Rate"}
-	columnWidths = []int{23, 23, 55, 6, 6, 6, 6, 3}
+	columnNames  = []string{"Source", "Destination", "Method", "Path", "Count", "Best", "Worst", "Last", "Success Rate"}
+	columnWidths = []int{23, 23, 10, 37, 6, 6, 6, 6, 3}
 )
 
 func newTopOptions() *topOptions {
@@ -131,7 +132,7 @@ func newCmdTop() *cobra.Command {
 				return err
 			}
 
-			return getTrafficByResourceFromAPI(os.Stdout, validatedPublicAPIClient(false), req, options)
+			return getTrafficByResourceFromAPI(os.Stdout, validatedPublicAPIClient(time.Time{}), req, options)
 		},
 	}
 
@@ -259,6 +260,7 @@ func renderTable(requestCh <-chan topRequest, done <-chan struct{}, withSource b
 
 func tableInsert(table *[]tableRow, req topRequest, withSource bool) {
 	by := req.reqInit.GetPath()
+	method := req.reqInit.GetMethod().GetRegistered().String()
 	source := stripPort(addr.PublicAddressToString(req.event.GetSource()))
 	if pod := req.event.SourceMeta.Labels["pod"]; pod != "" {
 		source = pod
@@ -286,7 +288,7 @@ func tableInsert(table *[]tableRow, req topRequest, withSource bool) {
 
 	found := false
 	for i, row := range *table {
-		if row.by == by && row.destination == destination && (row.source == source || !withSource) {
+		if row.by == by && row.method == method && row.destination == destination && (row.source == source || !withSource) {
 			(*table)[i].count++
 			if latency.Nanoseconds() < row.best.Nanoseconds() {
 				(*table)[i].best = latency
@@ -314,6 +316,7 @@ func tableInsert(table *[]tableRow, req topRequest, withSource bool) {
 		}
 		row := tableRow{
 			by:          by,
+			method:      method,
 			source:      source,
 			destination: destination,
 			count:       1,
@@ -345,28 +348,44 @@ func renderHeaders(withSource bool) {
 	}
 }
 
+func max(i, j int) int {
+	if i > j {
+		return i
+	}
+	return j
+}
+
 func renderTableBody(table *[]tableRow, withSource bool) {
 	sort.SliceStable(*table, func(i, j int) bool {
 		return (*table)[i].count > (*table)[j].count
 	})
+	adjustedColumnWidths := columnWidths
+	for _, row := range *table {
+		adjustedColumnWidths[0] = max(adjustedColumnWidths[0], runewidth.StringWidth(row.source))
+		adjustedColumnWidths[1] = max(adjustedColumnWidths[1], runewidth.StringWidth(row.destination))
+		adjustedColumnWidths[3] = max(adjustedColumnWidths[3], runewidth.StringWidth(row.by))
+
+	}
 	for i, row := range *table {
 		x := 0
 		if withSource {
 			tbprint(x, i+headerHeight, row.source)
-			x += columnWidths[0] + 1
+			x += adjustedColumnWidths[0] + 1
 		}
 		tbprint(x, i+headerHeight, row.destination)
-		x += columnWidths[1] + 1
+		x += adjustedColumnWidths[1] + 1
+		tbprint(x, i+headerHeight, row.method)
+		x += adjustedColumnWidths[2] + 1
 		tbprint(x, i+headerHeight, row.by)
-		x += columnWidths[2] + 1
+		x += adjustedColumnWidths[3] + 1
 		tbprint(x, i+headerHeight, strconv.Itoa(row.count))
-		x += columnWidths[3] + 1
+		x += adjustedColumnWidths[4] + 1
 		tbprint(x, i+headerHeight, formatDuration(row.best))
-		x += columnWidths[4] + 1
+		x += adjustedColumnWidths[5] + 1
 		tbprint(x, i+headerHeight, formatDuration(row.worst))
-		x += columnWidths[5] + 1
+		x += adjustedColumnWidths[6] + 1
 		tbprint(x, i+headerHeight, formatDuration(row.last))
-		x += columnWidths[6] + 1
+		x += adjustedColumnWidths[7] + 1
 		successRate := fmt.Sprintf("%.2f%%", 100.0*float32(row.successes)/float32(row.successes+row.failures))
 		tbprint(x, i+headerHeight, successRate)
 	}

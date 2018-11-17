@@ -1,9 +1,15 @@
-import _ from 'lodash';
+import { podOwnerLookup, toShortResourceName } from './Utils.js';
+
+import BaseTable from '../BaseTable.jsx';
+import Grid from '@material-ui/core/Grid';
+import { Link } from 'react-router-dom';
+import OpenInNewIcon from '@material-ui/icons/OpenInNew';
+import Popover from '../Popover.jsx';
 import PropTypes from 'prop-types';
 import React from 'react';
 import TapLink from '../TapLink.jsx';
-import { Popover, Tooltip } from 'antd';
-import { shortNameLookup, toShortResourceName } from './Utils.js';
+import Tooltip from '@material-ui/core/Tooltip';
+import _ from 'lodash';
 
 export const httpMethods = ["GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"];
 
@@ -15,6 +21,19 @@ export const setMaxRps = query => {
     query.maxRps = 0; // golang unset value for maxRps
   }
 };
+
+// use a generator to get this object, to prevent it from being overwritten
+export const emptyTapQuery = () => ({
+  resource: "",
+  namespace: "",
+  toResource: "",
+  toNamespace: "",
+  method: "",
+  path: "",
+  scheme: "",
+  authority: "",
+  maxRps: ""
+});
 
 export const tapQueryProps = {
   resource: PropTypes.string,
@@ -78,10 +97,19 @@ export const processNeighborData = (source, labels, resourceAgg, resourceType) =
     };
   }
 
+  // keep track of pods under this resource to display the number of unmeshed source pods
+  neighb.pods = {};
+  if (labels.pod) {
+    neighb.pods[labels.pod] = true;
+  }
+
   let key = neighb.type + "/" + neighb.name;
   if (_.has(labels, "control_plane_ns")) {
     delete resourceAgg[key];
   } else {
+    if (_.has(resourceAgg, key)) {
+      _.merge(neighb.pods, resourceAgg[key].pods);
+    }
     resourceAgg[key] = neighb;
   }
 
@@ -90,11 +118,16 @@ export const processNeighborData = (source, labels, resourceAgg, resourceType) =
 
 export const processTapEvent = jsonString => {
   let d = JSON.parse(jsonString);
-  d.source.str = publicAddressToString(_.get(d, "source.ip.ipv4"));
-  d.destination.str = publicAddressToString(_.get(d, "destination.ip.ipv4"));
 
-  d.source.pod = _.has(d, "sourceMeta.labels.pod") ? "po/" + d.sourceMeta.labels.pod : null;
-  d.destination.pod = _.has(d, "destinationMeta.labels.pod") ? "po/" + d.destinationMeta.labels.pod : null;
+  d.source.str = publicAddressToString(_.get(d, "source.ip.ipv4"));
+  d.source.pod = _.get(d, "sourceMeta.labels.pod", null);
+  d.source.owner = extractPodOwner(d.sourceMeta.labels);
+  d.source.namespace = _.get(d, "sourceMeta.labels.namespace", null);
+
+  d.destination.str = publicAddressToString(_.get(d, "destination.ip.ipv4"));
+  d.destination.pod = _.get(d, "destinationMeta.labels.pod", null);
+  d.destination.owner = extractPodOwner(d.destinationMeta.labels);
+  d.destination.namespace = _.get(d, "destinationMeta.labels.namespace", null);
 
   switch (d.proxyDirection) {
     case "INBOUND":
@@ -158,34 +191,112 @@ const publicAddressToString = ipv4 => {
 */
 const resourceShortLink = (resourceType, labels, ResourceLink) => (
   <ResourceLink
+    key={`${labels[resourceType]}-${labels.namespace}`}
     resource={{ type: resourceType, name: labels[resourceType], namespace: labels.namespace}}
     linkText={toShortResourceName(resourceType) + "/" + labels[resourceType]} />
 );
 
-const resourceSection = (ip, labels, ResourceLink) => {
-  return (
-    <React.Fragment>
-      {
-        _.map(labels, (labelVal, labelName) => {
-          if (_.has(shortNameLookup, labelName) && labelName !== "namespace" && labelName !== "service") {
-            return <div key={labelName + "-" + labelVal}>{ resourceShortLink(labelName, labels, ResourceLink) }</div>;
+const displayLimit = 3; // how many upstreams/downstreams to display in the popover table
+const popoverSrcDstColumns = [
+  { title: "Source", dataIndex: "source" },
+  { title: "", key: "arrow", render: () => <i className="fas fa-long-arrow-alt-right" /> },
+  { title: "Destination", dataIndex: "destination" }
+];
+
+const getPodOwner = (labels, ResourceLink) => {
+  let podOwner = extractPodOwner(labels);
+  if (!podOwner) {
+    return null;
+  } else {
+    let [labelName] = podOwner.split("/");
+    return (
+      <div className="popover-td">
+        { resourceShortLink(labelName, labels, ResourceLink) }
+      </div>
+    );
+  }
+};
+
+const getPodList = (endpoint, display, labels, ResourceLink) => {
+  let podList = "---";
+  if (!display) {
+    if (endpoint.pod) {
+      podList = resourceShortLink("pod", { pod: endpoint.pod, namespace: labels.namespace }, ResourceLink);
+    }
+  } else if (!_.isEmpty(display.pods)) {
+    podList = (
+      <React.Fragment>
+        {
+            _.map(display.pods, (namespace, pod, i) => {
+              if (i > displayLimit) {
+                return null;
+              } else {
+                return <div key={pod}>{resourceShortLink("pod", { pod, namespace }, ResourceLink)}</div>;
+              }
+            })
           }
-        })
-      }
-      <div>{ip}</div>
-    </React.Fragment>
+        { (_.size(display.pods) > displayLimit ? "..." : "") }
+      </React.Fragment>
+    );
+  }
+  return <div className="popover-td">{podList}</div>;
+};
+
+// display consists of a list of ips and pods for aggregated displays (Top)
+const getIpList = (endpoint, display) => {
+  let ipList = endpoint.str;
+  if (display) {
+    ipList = _(display.ips).keys().take(displayLimit).value().join(", ") +
+    (_.size(display.ips) > displayLimit ? "..." : "");
+  }
+  return <div className="popover-td">{ipList}</div>;
+};
+
+const popoverResourceTable = (d, ResourceLink) => { // eslint-disable-line no-unused-vars
+  let tableData = [
+    {
+      source: getPodOwner(d.sourceLabels, ResourceLink),
+      destination: getPodOwner(d.destinationLabels, ResourceLink),
+      key: "podOwner"
+    },
+    {
+      source: getPodList(d.source, d.sourceDisplay, d.sourceLabels, ResourceLink),
+      destination: getPodList(d.destination, d.destinationDisplay, d.destinationLabels, ResourceLink),
+      key: "podList"
+    },
+    {
+      source: getIpList(d.source, d.sourceDisplay),
+      destination: getIpList(d.destination, d.destinationDisplay),
+      key: "ipList"
+    }
+  ];
+
+  return (
+    <BaseTable
+      tableColumns={popoverSrcDstColumns}
+      tableRows={tableData}
+      tableClassName="metric-table" />
   );
 };
 
+export const extractPodOwner = labels => {
+  let podOwner = "";
+  _.each(labels, (labelVal, labelName) => {
+    if (_.has(podOwnerLookup, labelName)) {
+      podOwner = labelName + "/" + labelVal;
+    }
+  });
+  return podOwner;
+};
+
 export const directionColumn = d => (
-  <Tooltip
-    title={d}
-    overlayStyle={{ fontSize: "12px" }}>
-    {d === "INBOUND" ? "FROM" : "TO"}
+  <Tooltip title={d} placement="right">
+    <span>{d === "INBOUND" ? "FROM" : "TO"}</span>
   </Tooltip>
 );
 
 export const srcDstColumn = (d, resourceType, ResourceLink) => {
+
   let display = {};
   let labels = {};
 
@@ -197,24 +308,37 @@ export const srcDstColumn = (d, resourceType, ResourceLink) => {
     labels = d.destinationLabels;
   }
 
-  let content = (
-    <React.Fragment>
-      <h3>Source</h3>
-      {resourceSection(d.source.str, d.sourceLabels, ResourceLink)}
-      <br />
-      <h3>Destination</h3>
-      {resourceSection(d.destination.str, d.destinationLabels, ResourceLink)}
-    </React.Fragment>
+  let link = (
+    !_.isEmpty(labels[resourceType]) ?
+      resourceShortLink(resourceType, labels, ResourceLink) :
+      display.str
+  );
+
+  const linkFn = e => {
+    e.preventDefault();
+  };
+
+  let baseContent = (
+    <Link to="#" onClick={linkFn}>
+      <OpenInNewIcon fontSize="small" />
+    </Link>
   );
 
   return (
-    <Popover
-      content={content}
-      trigger="hover">
-      <div className="src-dst-name">
-        { !_.isEmpty(labels[resourceType]) ? resourceShortLink(resourceType, labels, ResourceLink) : display.str }
-      </div>
-    </Popover>
+    <Grid
+      container
+      direction="row"
+      alignItems="center"
+      spacing={8}>
+      <Grid item>
+        {link}
+      </Grid>
+      <Grid item>
+        <Popover
+          popoverContent={(popoverResourceTable(d, ResourceLink))}
+          baseContent={baseContent} />
+      </Grid>
+    </Grid>
   );
 };
 

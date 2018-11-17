@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/ghodss/yaml"
+	"github.com/linkerd/linkerd2/pkg/healthcheck"
 	"github.com/linkerd/linkerd2/pkg/k8s"
 	"github.com/spf13/cobra"
 	appsV1 "k8s.io/api/apps/v1"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/api/core/v1"
 	"k8s.io/api/extensions/v1beta1"
 	k8sMeta "k8s.io/apimachinery/pkg/api/meta"
+	k8sResource "k8s.io/apimachinery/pkg/api/resource"
 	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -41,10 +43,6 @@ const (
 )
 
 type injectOptions struct {
-	inboundPort         uint
-	outboundPort        uint
-	ignoreInboundPorts  []uint
-	ignoreOutboundPorts []uint
 	*proxyConfigOptions
 }
 
@@ -63,11 +61,7 @@ type objMeta struct {
 
 func newInjectOptions() *injectOptions {
 	return &injectOptions{
-		inboundPort:         4143,
-		outboundPort:        4140,
-		ignoreInboundPorts:  nil,
-		ignoreOutboundPorts: nil,
-		proxyConfigOptions:  newProxyConfigOptions(),
+		proxyConfigOptions: newProxyConfigOptions(),
 	}
 }
 
@@ -106,11 +100,6 @@ sub-folder. e.g. linkerd inject <folder> | kubectl apply -f -
 	}
 
 	addProxyConfigFlags(cmd, options.proxyConfigOptions)
-	cmd.PersistentFlags().UintVar(&options.inboundPort, "inbound-port", options.inboundPort, "Proxy port to use for inbound traffic")
-	cmd.PersistentFlags().UintVar(&options.outboundPort, "outbound-port", options.outboundPort, "Proxy port to use for outbound traffic")
-	cmd.PersistentFlags().UintSliceVar(&options.ignoreInboundPorts, "skip-inbound-ports", options.ignoreInboundPorts, "Ports that should skip the proxy and send directly to the application")
-	cmd.PersistentFlags().UintSliceVar(&options.ignoreOutboundPorts, "skip-outbound-ports", options.ignoreOutboundPorts, "Outbound ports that should skip the proxy")
-
 	return cmd
 }
 
@@ -182,7 +171,7 @@ func injectObjectMeta(t *metaV1.ObjectMeta, k8sLabels map[string]string, options
  */
 func injectPodSpec(t *v1.PodSpec, identity k8s.TLSIdentity, controlPlaneDNSNameOverride string, options *injectOptions, report *injectReport) bool {
 	report.hostNetwork = t.HostNetwork
-	report.sidecar = checkSidecars(t)
+	report.sidecar = healthcheck.HasExistingSidecars(t)
 	report.udp = checkUDPPorts(t)
 
 	// Skip injection if:
@@ -227,7 +216,7 @@ func injectPodSpec(t *v1.PodSpec, identity k8s.TLSIdentity, controlPlaneDNSNameO
 		Image:                    options.taggedProxyInitImage(),
 		ImagePullPolicy:          v1.PullPolicy(options.imagePullPolicy),
 		TerminationMessagePolicy: v1.TerminationMessageFallbackToLogsOnError,
-		Args:                     initArgs,
+		Args: initArgs,
 		SecurityContext: &v1.SecurityContext{
 			Capabilities: &v1.Capabilities{
 				Add: []v1.Capability{v1.Capability("NET_ADMIN")},
@@ -243,6 +232,7 @@ func injectPodSpec(t *v1.PodSpec, identity k8s.TLSIdentity, controlPlaneDNSNameO
 	metricsPort := intstr.IntOrString{
 		IntVal: int32(options.proxyMetricsPort),
 	}
+
 	proxyProbe := v1.Probe{
 		Handler: v1.Handler{
 			HTTPGet: &v1.HTTPGetAction{
@@ -251,6 +241,18 @@ func injectPodSpec(t *v1.PodSpec, identity k8s.TLSIdentity, controlPlaneDNSNameO
 			},
 		},
 		InitialDelaySeconds: 10,
+	}
+
+	resources := v1.ResourceRequirements{
+		Requests: v1.ResourceList{},
+	}
+
+	if options.proxyCpuRequest != "" {
+		resources.Requests["cpu"] = k8sResource.MustParse(options.proxyCpuRequest)
+	}
+
+	if options.proxyMemoryRequest != "" {
+		resources.Requests["memory"] = k8sResource.MustParse(options.proxyMemoryRequest)
 	}
 
 	sidecar := v1.Container{
@@ -271,6 +273,7 @@ func injectPodSpec(t *v1.PodSpec, identity k8s.TLSIdentity, controlPlaneDNSNameO
 				ContainerPort: int32(options.proxyMetricsPort),
 			},
 		},
+		Resources: resources,
 		Env: []v1.EnvVar{
 			{Name: "LINKERD2_PROXY_LOG", Value: options.proxyLogLevel},
 			{Name: "LINKERD2_PROXY_BIND_TIMEOUT", Value: options.proxyBindTimeout},
@@ -280,8 +283,8 @@ func injectPodSpec(t *v1.PodSpec, identity k8s.TLSIdentity, controlPlaneDNSNameO
 			},
 			{Name: "LINKERD2_PROXY_CONTROL_LISTENER", Value: fmt.Sprintf("tcp://0.0.0.0:%d", options.proxyControlPort)},
 			{Name: "LINKERD2_PROXY_METRICS_LISTENER", Value: fmt.Sprintf("tcp://0.0.0.0:%d", options.proxyMetricsPort)},
-			{Name: "LINKERD2_PROXY_PRIVATE_LISTENER", Value: fmt.Sprintf("tcp://127.0.0.1:%d", options.outboundPort)},
-			{Name: "LINKERD2_PROXY_PUBLIC_LISTENER", Value: fmt.Sprintf("tcp://0.0.0.0:%d", options.inboundPort)},
+			{Name: "LINKERD2_PROXY_OUTBOUND_LISTENER", Value: fmt.Sprintf("tcp://127.0.0.1:%d", options.outboundPort)},
+			{Name: "LINKERD2_PROXY_INBOUND_LISTENER", Value: fmt.Sprintf("tcp://0.0.0.0:%d", options.inboundPort)},
 			{
 				Name:      PodNamespaceEnvVarName,
 				ValueFrom: &v1.EnvVarSource{FieldRef: &v1.ObjectFieldSelector{FieldPath: "metadata.namespace"}},
@@ -735,33 +738,5 @@ func checkUDPPorts(t *v1.PodSpec) bool {
 			}
 		}
 	}
-	return false
-}
-
-func checkSidecars(t *v1.PodSpec) bool {
-	// check for known proxies and initContainers
-	for _, container := range t.Containers {
-		if strings.HasPrefix(container.Image, "gcr.io/linkerd-io/proxy:") ||
-			strings.HasPrefix(container.Image, "gcr.io/istio-release/proxyv2:") ||
-			strings.HasPrefix(container.Image, "gcr.io/heptio-images/contour:") ||
-			strings.HasPrefix(container.Image, "docker.io/envoyproxy/envoy-alpine:") ||
-			container.Name == "linkerd-proxy" ||
-			container.Name == "istio-proxy" ||
-			container.Name == "contour" ||
-			container.Name == "envoy" {
-			return true
-		}
-	}
-	for _, ic := range t.InitContainers {
-		if strings.HasPrefix(ic.Image, "gcr.io/linkerd-io/proxy-init:") ||
-			strings.HasPrefix(ic.Image, "gcr.io/istio-release/proxy_init:") ||
-			strings.HasPrefix(ic.Image, "gcr.io/heptio-images/contour:") ||
-			ic.Name == "linkerd-init" ||
-			ic.Name == "istio-init" ||
-			ic.Name == "envoy-initconfig" {
-			return true
-		}
-	}
-
 	return false
 }

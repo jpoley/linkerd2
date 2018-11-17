@@ -1,55 +1,38 @@
-import _ from 'lodash';
-import { metricToFormatter } from './Utils.js';
 import Percentage from './Percentage.js';
-import { Progress } from 'antd';
 import PropTypes from 'prop-types';
-import React from 'react';
+import _ from 'lodash';
 
 const getPodCategorization = pod => {
   if (pod.added && pod.status === "Running") {
     return "good";
   } else if (pod.status === "Pending" || pod.status === "Running") {
-    return "neutral";
+    return "default";
   } else if (pod.status === "Failed") {
-    return "bad";
+    return "poor";
   }
   return ""; // Terminating | Succeeded | Unknown
 };
 
-export const getSuccessRateClassification = (rate, successRateLabels) => {
+export const getSuccessRateClassification = (rate, successRateLabels = srArcClassLabels) => {
   if (_.isNull(rate)) {
     return successRateLabels.default;
   }
 
   if (rate < 0.9) {
-    return successRateLabels.bad;
+    return successRateLabels.poor;
   } else if (rate < 0.95) {
-    return successRateLabels.neutral;
+    return successRateLabels.warning;
   } else {
     return successRateLabels.good;
   }
 };
 
-export const srArcClassLabels = {
-  good: "status-good",
-  neutral: "status-ok",
-  bad: "status-poor",
-  default: "status-ok"
+const srArcClassLabels = {
+  good: "good",
+  warning: "warning",
+  poor: "poor",
+  default: "default"
 };
-
-export const successRateWithMiniChart = sr => (
-  <div>
-    <span className="metric-table-sr">{metricToFormatter["SUCCESS_RATE"](sr)}</span>
-    <Progress
-      className={`success-rate-arc ${getSuccessRateClassification(sr, srArcClassLabels)} metric-table-sr-chart`}
-      type="dashboard"
-      showInfo={false}
-      width={32}
-      strokeWidth={12}
-      percent={sr * 100}
-      gapDegree={180} />
-  </div>
-);
 
 const getTotalRequests = row => {
   let success = parseInt(_.get(row, ["stats", "successCount"], 0), 10);
@@ -150,6 +133,7 @@ const processStatTable = table => {
     let runningPodCount = parseInt(row.runningPodCount, 10);
     let meshedPodCount = parseInt(row.meshedPodCount, 10);
     return {
+      key: `${row.resource.namespace}-${row.resource.type}-${row.resource.name}`,
       name: row.resource.name,
       namespace: row.resource.namespace,
       type: row.resource.type,
@@ -209,28 +193,46 @@ export const excludeResourcesFromRollup = (rollupMetrics, resourcesToExclude) =>
   return rollupMetrics;
 };
 
+export const emptyMetric = {
+  key: "",
+  name: "",
+  namespace: "",
+  type: "",
+  totalRequests: null,
+  requestRate: null,
+  successRate: null,
+  latency: null,
+  tlsRequestPercent: null,
+  added: false,
+  pods: {
+    totalPods: null,
+    meshedPods: null,
+    meshedPercentage: null
+  }
+};
+
 export const metricsPropType = PropTypes.shape({
   ok: PropTypes.shape({
     statTables: PropTypes.arrayOf(PropTypes.shape({
       podGroup: PropTypes.shape({
         rows: PropTypes.arrayOf(PropTypes.shape({
           failedPodCount: PropTypes.string,
-          meshedPodCount: PropTypes.string.isRequired,
+          meshedPodCount: PropTypes.string,
           resource: PropTypes.shape({
-            name: PropTypes.string.isRequired,
-            namespace: PropTypes.string.isRequired,
-            type: PropTypes.string.isRequired,
+            name: PropTypes.string,
+            namespace: PropTypes.string,
+            type: PropTypes.string,
           }).isRequired,
-          runningPodCount: PropTypes.string.isRequired,
+          runningPodCount: PropTypes.string,
           stats: PropTypes.shape({
-            failureCount: PropTypes.string.isRequired,
-            latencyMsP50: PropTypes.string.isRequired,
-            latencyMsP95: PropTypes.string.isRequired,
-            latencyMsP99: PropTypes.string.isRequired,
-            tlsRequestCount: PropTypes.string.isRequired,
-            successCount: PropTypes.string.isRequired,
+            failureCount: PropTypes.string,
+            latencyMsP50: PropTypes.string,
+            latencyMsP95: PropTypes.string,
+            latencyMsP99: PropTypes.string,
+            tlsRequestCount: PropTypes.string,
+            successCount: PropTypes.string,
           }),
-          timeWindow: PropTypes.string.isRequired,
+          timeWindow: PropTypes.string,
         }).isRequired),
       }),
     }).isRequired).isRequired,
@@ -240,7 +242,7 @@ export const metricsPropType = PropTypes.shape({
 export const processedMetricsPropType = PropTypes.shape({
   name: PropTypes.string.isRequired,
   namespace: PropTypes.string.isRequired,
-  totalRequests: PropTypes.number.isRequired,
+  totalRequests: PropTypes.number,
   requestRate: PropTypes.number,
   successRate: PropTypes.number,
 });

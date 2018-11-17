@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strings"
 	"time"
 
 	httpPb "github.com/linkerd/linkerd2-proxy-api/go/http_types"
@@ -18,6 +17,7 @@ import (
 	"github.com/linkerd/linkerd2/pkg/addr"
 	pkgK8s "github.com/linkerd/linkerd2/pkg/k8s"
 	"github.com/linkerd/linkerd2/pkg/prometheus"
+	"github.com/linkerd/linkerd2/pkg/util"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -114,40 +114,6 @@ func (s *server) TapByResource(req *public.TapByResourceRequest, stream pb.Tap_T
 	}
 }
 
-// TODO: validate scheme
-func parseScheme(scheme string) *httpPb.Scheme {
-	value, ok := httpPb.Scheme_Registered_value[strings.ToUpper(scheme)]
-	if ok {
-		return &httpPb.Scheme{
-			Type: &httpPb.Scheme_Registered_{
-				Registered: httpPb.Scheme_Registered(value),
-			},
-		}
-	}
-	return &httpPb.Scheme{
-		Type: &httpPb.Scheme_Unregistered{
-			Unregistered: strings.ToUpper(scheme),
-		},
-	}
-}
-
-// TODO: validate method
-func parseMethod(method string) *httpPb.HttpMethod {
-	value, ok := httpPb.HttpMethod_Registered_value[strings.ToUpper(method)]
-	if ok {
-		return &httpPb.HttpMethod{
-			Type: &httpPb.HttpMethod_Registered_{
-				Registered: httpPb.HttpMethod_Registered(value),
-			},
-		}
-	}
-	return &httpPb.HttpMethod{
-		Type: &httpPb.HttpMethod_Unregistered{
-			Unregistered: strings.ToUpper(method),
-		},
-	}
-}
-
 func makeByResourceMatch(match *public.TapByResourceRequest_Match) (*proxy.ObserveRequest_Match, error) {
 	// TODO: for now assume it's always a single, flat `All` match list
 	seq := match.GetAll()
@@ -180,13 +146,13 @@ func makeByResourceMatch(match *public.TapByResourceRequest_Match) (*proxy.Obser
 			case *public.TapByResourceRequest_Match_Http_Scheme:
 				httpMatch = proxy.ObserveRequest_Match_Http{
 					Match: &proxy.ObserveRequest_Match_Http_Scheme{
-						Scheme: parseScheme(httpTyped.Scheme),
+						Scheme: util.ParseScheme(httpTyped.Scheme),
 					},
 				}
 			case *public.TapByResourceRequest_Match_Http_Method:
 				httpMatch = proxy.ObserveRequest_Match_Http{
 					Match: &proxy.ObserveRequest_Match_Http_Method{
-						Method: parseMethod(httpTyped.Method),
+						Method: util.ParseMethod(httpTyped.Method),
 					},
 				}
 			case *public.TapByResourceRequest_Match_Http_Authority:

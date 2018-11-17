@@ -1,20 +1,21 @@
-import _ from 'lodash';
-import ErrorBanner from './ErrorBanner.jsx';
-import { friendlyTitle } from './util/Utils.js';
-import MetricsTable from './MetricsTable.jsx';
-import PageHeader from './PageHeader.jsx';
-import PropTypes from 'prop-types';
-import React from 'react';
-import { withContext } from './util/AppContext.jsx';
-import { Collapse, Icon, Spin, Tooltip } from 'antd';
-import { processMultiResourceRollup, processSingleResourceRollup } from './util/MetricUtils.jsx';
 import 'whatwg-fetch';
 
-const isMeshedTooltip = (
-  <Tooltip placement="right" title="Namespace is meshed" overlayStyle={{ fontSize: "12px" }}>
-    <Icon className="status-ok" type="check-circle" />
-  </Tooltip>
-);
+import { processMultiResourceRollup, processSingleResourceRollup } from './util/MetricUtils.jsx';
+
+import Accordion from './util/Accordion.jsx';
+import Divider from '@material-ui/core/Divider';
+import ErrorBanner from './ErrorBanner.jsx';
+import Grid from '@material-ui/core/Grid';
+import MetricsTable from './MetricsTable.jsx';
+import PropTypes from 'prop-types';
+import React from 'react';
+import SimpleChip from './util/Chip.jsx';
+import Spinner from './util/Spinner.jsx';
+import Typography from '@material-ui/core/Typography';
+import _ from 'lodash';
+import { friendlyTitle } from './util/Utils.js';
+import { withContext } from './util/AppContext.jsx';
+
 class NamespaceLanding extends React.Component {
   static propTypes = {
     api: PropTypes.shape({
@@ -57,7 +58,7 @@ class NamespaceLanding extends React.Component {
     this.api.cancelCurrentRequests();
   }
 
-  onNsSelect = ns => {
+  onNamespaceChange = ns => {
     this.setState({
       selectedNs: ns
     });
@@ -69,6 +70,7 @@ class NamespaceLanding extends React.Component {
     }
     this.setState({ pendingRequests: true });
 
+    // TODO: make this one request
     let apiRequests = [
       this.api.fetchMetrics(this.api.urlsForResource("namespace"))
     ];
@@ -119,63 +121,67 @@ class NamespaceLanding extends React.Component {
       return null;
     }
     return (
-      <div className="page-section">
-        <h3>{friendlyTitle(resource).plural}</h3>
-        <MetricsTable
-          resource={resource}
-          metrics={metrics}
-          showNamespaceColumn={false} />
-      </div>
+      <Grid container direction="column" justify="center">
+        <Grid item>
+          <Typography variant="h5">{friendlyTitle(resource).plural}</Typography>
+        </Grid>
+
+        <Grid item>
+          <MetricsTable
+            resource={resource}
+            metrics={metrics}
+            showNamespaceColumn={false} />
+        </Grid>
+      </Grid>
     );
   }
 
   renderNamespaceSection(namespace) {
     if (!_.has(this.state.metricsByNs, namespace)) {
-      return <Spin size="large" className="short-spin-section" />;
+      return <Spinner />;
     }
 
     let metrics = this.state.metricsByNs[namespace] || {};
     let noMetrics = _.isEmpty(metrics.pod);
 
     return (
-      <div>
-        <h2>Namespace: {namespace}</h2>
-        { noMetrics ? <div>No resources detected.</div> : null}
+      <Grid container direction="column" spacing={16}>
+        <Grid item><Typography variant="h4">Namespace: {namespace}</Typography></Grid>
+        <Grid item><Divider /></Grid>
+        <Grid item>{ noMetrics ? <div>No resources detected.</div> : null}</Grid>
+
         {this.renderResourceSection("deployment", metrics.deployment)}
         {this.renderResourceSection("replicationcontroller", metrics.replicationcontroller)}
         {this.renderResourceSection("pod", metrics.pod)}
         {this.renderResourceSection("authority", metrics.authority)}
-      </div>
+      </Grid>
     );
   }
 
   renderAccordion() {
-    return (
-      <React.Fragment>
-        <PageHeader header="Namespaces" />
-        <Collapse
-          accordion={true}
-          defaultActiveKey={_.get(this.state.defaultOpenNs, 'name', null)}
-          onChange={this.onNsSelect}>
-          {
-            _.map(this.state.namespaces, ns => {
-              let header = (
-                <React.Fragment>{ns.name} {!ns.added ? null : isMeshedTooltip}</React.Fragment>
-              );
+    let panelData = _.map(this.state.namespaces, ns => {
+      let hr = (
+        <Grid container justify="space-between" alignItems="center">
+          <Grid item><Typography variant="subtitle1">{ns.name}</Typography></Grid>
+          {!ns.added ? null : <Grid item><SimpleChip /></Grid> }
+        </Grid>
+      );
+      return {
+        id: ns.name,
+        header: hr,
+        body: ns.name === this.state.selectedNs || ns.name === this.state.defaultOpenNs.name ?
+          this.renderNamespaceSection(ns.name) : null
+      };
+    });
 
-              return (
-                <Collapse.Panel
-                  showArrow={false}
-                  header={header}
-                  key={ns.name}>
-                  {ns.name === this.state.selectedNs || ns.name === this.state.defaultOpenNs.name ?
-                  this.renderNamespaceSection(ns.name) : null}
-                </Collapse.Panel>
-              );
-            })
-          }
-        </Collapse>
-      </React.Fragment>
+    return (
+      <Grid container>
+
+        <Accordion
+          onChange={this.onNamespaceChange}
+          panels={panelData}
+          defaultOpenPanel={_.get(this.state.defaultOpenNs, 'name', null)} />
+      </Grid>
     );
   }
 
@@ -183,7 +189,7 @@ class NamespaceLanding extends React.Component {
     return (
       <div className="page-content">
         { !this.state.error ? null : <ErrorBanner message={this.state.error} /> }
-        { !this.state.loaded ? <Spin size="large" /> : this.renderAccordion() }
+        { !this.state.loaded ? <Spinner /> : this.renderAccordion() }
       </div>);
   }
 }

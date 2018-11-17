@@ -1,17 +1,20 @@
-import _ from 'lodash';
+import 'whatwg-fetch';
+
+import { emptyMetric, processSingleResourceRollup } from './util/MetricUtils.jsx';
+import { resourceTypeToCamelCase, singularResource } from './util/Utils.js';
+
 import AddResources from './AddResources.jsx';
 import ErrorBanner from './ErrorBanner.jsx';
 import MetricsTable from './MetricsTable.jsx';
 import Octopus from './Octopus.jsx';
-import { processNeighborData } from './util/TapUtils.jsx';
-import { processSingleResourceRollup } from './util/MetricUtils.jsx';
 import PropTypes from 'prop-types';
 import React from 'react';
-import { Spin } from 'antd';
+import Spinner from './util/Spinner.jsx';
 import TopModule from './TopModule.jsx';
+import Typography from '@material-ui/core/Typography';
+import _ from 'lodash';
+import { processNeighborData } from './util/TapUtils.jsx';
 import { withContext } from './util/AppContext.jsx';
-import { resourceTypeToCamelCase, singularResource } from './util/Utils.js';
-import 'whatwg-fetch';
 
 const getResourceFromUrl = (match, pathPrefix) => {
   let resource = {
@@ -34,7 +37,9 @@ export class ResourceDetailBase extends React.Component {
     api: PropTypes.shape({
       PrefixedLink: PropTypes.func.isRequired,
     }).isRequired,
-    match: PropTypes.shape({}).isRequired,
+    match: PropTypes.shape({
+      url: PropTypes.string.isRequired
+    }).isRequired,
     pathPrefix: PropTypes.string.isRequired
   }
 
@@ -74,11 +79,13 @@ export class ResourceDetailBase extends React.Component {
     this.timerId = window.setInterval(this.loadFromServer, this.state.pollingInterval);
   }
 
-  componentWillReceiveProps(newProps) {
-    // React won't unmount this component when switching resource pages so we need to clear state
-    this.api.cancelCurrentRequests();
-    this.unmeshedSources = {};
-    this.setState(this.getInitialState(newProps.match, newProps.pathPrefix));
+  componentDidUpdate(prevProps) {
+    if (!_.isEqual(prevProps.match.url, this.props.match.url)) {
+      // React won't unmount this component when switching resource pages so we need to clear state
+      this.api.cancelCurrentRequests();
+      this.unmeshedSources = {};
+      this.setState(this.getInitialState(this.props.match, this.props.pathPrefix));
+    }
   }
 
   componentWillUnmount() {
@@ -185,13 +192,26 @@ export class ResourceDetailBase extends React.Component {
 
   content = () => {
     if (!this.state.loaded && !this.state.error) {
-      return <Spin size="large" />;
+      return <Spinner />;
     }
 
     let topQuery = {
       resource: this.state.resourceType + "/" + this.state.resourceName,
       namespace: this.state.namespace
     };
+
+    let unmeshed = _.chain(this.state.unmeshedSources)
+      .filter(['type', this.state.resourceType])
+      .map(d => _.merge({}, emptyMetric, d, {
+        unmeshed: true,
+        pods: {
+          totalPods: _.size(d.pods),
+          meshedPods: 0
+        }
+      }))
+      .value();
+
+    let upstreams = _.concat(this.state.neighborMetrics.upstream, unmeshed);
 
     return (
       <div>
@@ -224,19 +244,19 @@ export class ResourceDetailBase extends React.Component {
           </div>
         }
 
-        { _.isEmpty(this.state.neighborMetrics.upstream) ? null : (
+        { _.isEmpty(upstreams) ? null : (
           <div className="page-section">
-            <h2 className="subsection-header">Inbound</h2>
+            <Typography variant="h5">Inbound</Typography>
             <MetricsTable
               resource={this.state.resource.type}
-              metrics={this.state.neighborMetrics.upstream} />
+              metrics={upstreams} />
           </div>
           )
         }
 
         { _.isEmpty(this.state.neighborMetrics.downstream) ? null : (
           <div className="page-section">
-            <h2 className="subsection-header">Outbound</h2>
+            <Typography variant="h5">Outbound</Typography>
             <MetricsTable
               resource={this.state.resource.type}
               metrics={this.state.neighborMetrics.downstream} />
@@ -247,7 +267,7 @@ export class ResourceDetailBase extends React.Component {
         {
           this.state.resource.type === "pod" ? null : (
             <div className="page-section">
-              <h2 className="subsection-header">Pods</h2>
+              <Typography variant="h5">Pods</Typography>
               <MetricsTable
                 resource="pod"
                 metrics={this.state.podMetrics} />

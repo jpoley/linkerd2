@@ -1,5 +1,6 @@
-import _ from 'lodash';
 import * as d3 from 'd3';
+
+import _ from 'lodash';
 
 /*
 * Display grid constants
@@ -51,7 +52,8 @@ export const metricToFormatter = {
   "REQUEST_RATE": m => _.isNil(m) ? "---" : styleNum(m, " RPS", true),
   "SUCCESS_RATE": m => _.isNil(m) ? "---" : successRateFormatter(m),
   "LATENCY": formatLatencyMs,
-  "UNTRUNCATED": m => styleNum(m, "", false)
+  "UNTRUNCATED": m => styleNum(m, "", false),
+  "NO_UNIT": m => _.isNil(m) ? "---" : styleNum(m, "", true)
 };
 
 /*
@@ -111,7 +113,7 @@ export const toClassName = name => {
 };
 
 /*
-  Definition of sort, for ant table sorting
+  Definition of sort, for numeric column sorting
 */
 export const numericSort = (a, b) => (_.isNil(a) ? -1 : a) - (_.isNil(b) ? -1 : b);
 
@@ -170,7 +172,17 @@ export const shortNameLookup = {
   "authority": "au"
 };
 
+export const podOwnerLookup = {
+  "deployment": "deploy",
+  "daemonset": "ds",
+  "replicationcontroller": "rc",
+  "replicaset": "rs",
+  "statefulset": "sts",
+};
+
 export const toShortResourceName = name => shortNameLookup[name] || name;
+
+export const displayName = resource => `${toShortResourceName(resource.type)}/${resource.name}`;
 
 export const isResource = name => {
   let singularResourceName = singularResource(name);

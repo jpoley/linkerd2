@@ -69,7 +69,7 @@ func genEmptyResponse() pb.StatSummaryResponse {
 
 func testStatSummary(t *testing.T, expectations []statSumExpected) {
 	for _, exp := range expectations {
-		k8sAPI, err := k8s.NewFakeAPI(exp.k8sConfigs...)
+		k8sAPI, err := k8s.NewFakeAPI("", exp.k8sConfigs...)
 		if err != nil {
 			t.Fatalf("NewFakeAPI returned an error: %s", err)
 		}
@@ -216,7 +216,7 @@ status:
 					},
 					TimeWindow: "1m",
 				},
-				expectedResponse: GenStatSummaryResponse("emoji", pkgK8s.Deployment, "emojivoto", &PodCounts{
+				expectedResponse: GenStatSummaryResponse("emoji", pkgK8s.Deployment, []string{"emojivoto"}, &PodCounts{
 					MeshedPods:  1,
 					RunningPods: 2,
 					FailedPods:  0,
@@ -261,7 +261,7 @@ status:
 					`histogram_quantile(0.99, sum(irate(response_latency_ms_bucket{direction="inbound", namespace="emojivoto", pod="emojivoto-1"}[1m])) by (le, namespace, pod))`,
 					`sum(increase(response_total{direction="inbound", namespace="emojivoto", pod="emojivoto-1"}[1m])) by (namespace, pod, classification, tls)`,
 				},
-				expectedResponse: GenStatSummaryResponse("emojivoto-1", pkgK8s.Pod, "emojivoto", &PodCounts{
+				expectedResponse: GenStatSummaryResponse("emojivoto-1", pkgK8s.Pod, []string{"emojivoto"}, &PodCounts{
 					MeshedPods:  1,
 					RunningPods: 1,
 					FailedPods:  0,
@@ -308,10 +308,10 @@ status:
 					},
 				},
 				expectedPrometheusQueries: []string{
-					`histogram_quantile(0.5, sum(irate(response_latency_ms_bucket{direction="outbound", namespace="emojivoto", pod="emojivoto-2"}[1m])) by (le, dst_namespace, dst_pod))`,
-					`histogram_quantile(0.95, sum(irate(response_latency_ms_bucket{direction="outbound", namespace="emojivoto", pod="emojivoto-2"}[1m])) by (le, dst_namespace, dst_pod))`,
-					`histogram_quantile(0.99, sum(irate(response_latency_ms_bucket{direction="outbound", namespace="emojivoto", pod="emojivoto-2"}[1m])) by (le, dst_namespace, dst_pod))`,
-					`sum(increase(response_total{direction="outbound", namespace="emojivoto", pod="emojivoto-2"}[1m])) by (dst_namespace, dst_pod, classification, tls)`,
+					`histogram_quantile(0.5, sum(irate(response_latency_ms_bucket{direction="outbound", dst_namespace="emojivoto", dst_pod="emojivoto-1", namespace="emojivoto", pod="emojivoto-2"}[1m])) by (le, dst_namespace, dst_pod))`,
+					`histogram_quantile(0.95, sum(irate(response_latency_ms_bucket{direction="outbound", dst_namespace="emojivoto", dst_pod="emojivoto-1", namespace="emojivoto", pod="emojivoto-2"}[1m])) by (le, dst_namespace, dst_pod))`,
+					`histogram_quantile(0.99, sum(irate(response_latency_ms_bucket{direction="outbound", dst_namespace="emojivoto", dst_pod="emojivoto-1", namespace="emojivoto", pod="emojivoto-2"}[1m])) by (le, dst_namespace, dst_pod))`,
+					`sum(increase(response_total{direction="outbound", dst_namespace="emojivoto", dst_pod="emojivoto-1", namespace="emojivoto", pod="emojivoto-2"}[1m])) by (dst_namespace, dst_pod, classification, tls)`,
 				},
 				expectedResponse: genEmptyResponse(),
 			},
@@ -363,7 +363,7 @@ status:
 					`histogram_quantile(0.99, sum(irate(response_latency_ms_bucket{direction="outbound", dst_namespace="emojivoto", dst_pod="emojivoto-2", namespace="emojivoto", pod="emojivoto-1"}[1m])) by (le, namespace, pod))`,
 					`sum(increase(response_total{direction="outbound", dst_namespace="emojivoto", dst_pod="emojivoto-2", namespace="emojivoto", pod="emojivoto-1"}[1m])) by (namespace, pod, classification, tls)`,
 				},
-				expectedResponse: GenStatSummaryResponse("emojivoto-1", pkgK8s.Pod, "emojivoto", &PodCounts{
+				expectedResponse: GenStatSummaryResponse("emojivoto-1", pkgK8s.Pod, []string{"emojivoto"}, &PodCounts{
 					MeshedPods:  1,
 					RunningPods: 1,
 					FailedPods:  0,
@@ -417,7 +417,7 @@ status:
 					`histogram_quantile(0.99, sum(irate(response_latency_ms_bucket{direction="outbound", dst_namespace="totallydifferent", dst_pod="emojivoto-2", namespace="emojivoto", pod="emojivoto-1"}[1m])) by (le, namespace, pod))`,
 					`sum(increase(response_total{direction="outbound", dst_namespace="totallydifferent", dst_pod="emojivoto-2", namespace="emojivoto", pod="emojivoto-1"}[1m])) by (namespace, pod, classification, tls)`,
 				},
-				expectedResponse: GenStatSummaryResponse("emojivoto-1", pkgK8s.Pod, "emojivoto", &PodCounts{
+				expectedResponse: GenStatSummaryResponse("emojivoto-1", pkgK8s.Pod, []string{"emojivoto"}, &PodCounts{
 					MeshedPods:  1,
 					RunningPods: 1,
 					FailedPods:  0,
@@ -482,7 +482,7 @@ status:
 					`histogram_quantile(0.99, sum(irate(response_latency_ms_bucket{direction="outbound", pod="emojivoto-2"}[1m])) by (le, dst_namespace, dst_pod))`,
 					`sum(increase(response_total{direction="outbound", pod="emojivoto-2"}[1m])) by (dst_namespace, dst_pod, classification, tls)`,
 				},
-				expectedResponse: GenStatSummaryResponse("emojivoto-1", pkgK8s.Pod, "emojivoto", &PodCounts{
+				expectedResponse: GenStatSummaryResponse("emojivoto-1", pkgK8s.Pod, []string{"emojivoto"}, &PodCounts{
 					MeshedPods:  1,
 					RunningPods: 1,
 					FailedPods:  0,
@@ -542,12 +542,12 @@ status:
 					},
 				},
 				expectedPrometheusQueries: []string{
-					`histogram_quantile(0.5, sum(irate(response_latency_ms_bucket{direction="outbound", namespace="totallydifferent", pod="emojivoto-2"}[1m])) by (le, dst_namespace, dst_pod))`,
-					`histogram_quantile(0.95, sum(irate(response_latency_ms_bucket{direction="outbound", namespace="totallydifferent", pod="emojivoto-2"}[1m])) by (le, dst_namespace, dst_pod))`,
-					`histogram_quantile(0.99, sum(irate(response_latency_ms_bucket{direction="outbound", namespace="totallydifferent", pod="emojivoto-2"}[1m])) by (le, dst_namespace, dst_pod))`,
-					`sum(increase(response_total{direction="outbound", namespace="totallydifferent", pod="emojivoto-2"}[1m])) by (dst_namespace, dst_pod, classification, tls)`,
+					`histogram_quantile(0.5, sum(irate(response_latency_ms_bucket{direction="outbound", dst_namespace="emojivoto", dst_pod="emojivoto-1", namespace="totallydifferent", pod="emojivoto-2"}[1m])) by (le, dst_namespace, dst_pod))`,
+					`histogram_quantile(0.95, sum(irate(response_latency_ms_bucket{direction="outbound", dst_namespace="emojivoto", dst_pod="emojivoto-1", namespace="totallydifferent", pod="emojivoto-2"}[1m])) by (le, dst_namespace, dst_pod))`,
+					`histogram_quantile(0.99, sum(irate(response_latency_ms_bucket{direction="outbound", dst_namespace="emojivoto", dst_pod="emojivoto-1", namespace="totallydifferent", pod="emojivoto-2"}[1m])) by (le, dst_namespace, dst_pod))`,
+					`sum(increase(response_total{direction="outbound", dst_namespace="emojivoto", dst_pod="emojivoto-1", namespace="totallydifferent", pod="emojivoto-2"}[1m])) by (dst_namespace, dst_pod, classification, tls)`,
 				},
-				expectedResponse: GenStatSummaryResponse("emojivoto-1", pkgK8s.Pod, "emojivoto", &PodCounts{
+				expectedResponse: GenStatSummaryResponse("emojivoto-1", pkgK8s.Pod, []string{"emojivoto"}, &PodCounts{
 					MeshedPods:  1,
 					RunningPods: 1,
 					FailedPods:  0,
@@ -728,7 +728,7 @@ status:
 	})
 
 	t.Run("Given an invalid resource type, returns error", func(t *testing.T) {
-		k8sAPI, err := k8s.NewFakeAPI()
+		k8sAPI, err := k8s.NewFakeAPI("")
 		if err != nil {
 			t.Fatalf("NewFakeAPI returned an error: %s", err)
 		}
@@ -787,7 +787,7 @@ status:
 	})
 
 	t.Run("Validates service stat requests", func(t *testing.T) {
-		k8sAPI, err := k8s.NewFakeAPI()
+		k8sAPI, err := k8s.NewFakeAPI("")
 		if err != nil {
 			t.Fatalf("NewFakeAPI returned an error: %s", err)
 		}
@@ -1008,7 +1008,7 @@ status:
 						},
 						TimeWindow: "1m",
 					},
-					expectedResponse: GenStatSummaryResponse("emoji", pkgK8s.Deployment, "emojivoto", &PodCounts{
+					expectedResponse: GenStatSummaryResponse("emoji", pkgK8s.Deployment, []string{"emojivoto"}, &PodCounts{
 						MeshedPods:  1,
 						RunningPods: 2,
 						FailedPods:  1,
@@ -1055,14 +1055,14 @@ status:
 					`histogram_quantile(0.99, sum(irate(response_latency_ms_bucket{direction="inbound", namespace="linkerd"}[1m])) by (le, namespace, authority))`,
 					`sum(increase(response_total{direction="inbound", namespace="linkerd"}[1m])) by (namespace, authority, classification, tls)`,
 				},
-				expectedResponse: GenStatSummaryResponse("10.1.1.239:9995", pkgK8s.Authority, "linkerd", nil),
+				expectedResponse: GenStatSummaryResponse("10.1.1.239:9995", pkgK8s.Authority, []string{"linkerd"}, nil),
 			},
 		}
 
 		testStatSummary(t, expectations)
 	})
 
-	t.Run("Queries prometheus for authority stats when --from authority is used", func(t *testing.T) {
+	t.Run("Queries prometheus for authority stats when --from deployment is used", func(t *testing.T) {
 		expectations := []statSumExpected{
 			statSumExpected{
 				err: nil,
@@ -1104,7 +1104,7 @@ status:
 					`histogram_quantile(0.99, sum(irate(response_latency_ms_bucket{deployment="emojivoto", direction="outbound"}[1m])) by (le, dst_namespace, authority))`,
 					`sum(increase(response_total{deployment="emojivoto", direction="outbound"}[1m])) by (dst_namespace, authority, classification, tls)`,
 				},
-				expectedResponse: GenStatSummaryResponse("10.1.1.239:9995", pkgK8s.Authority, "", nil),
+				expectedResponse: GenStatSummaryResponse("10.1.1.239:9995", pkgK8s.Authority, []string{""}, nil),
 			},
 		}
 
@@ -1147,7 +1147,7 @@ status:
 					`histogram_quantile(0.99, sum(irate(response_latency_ms_bucket{authority="10.1.1.239:9995", direction="inbound", namespace="linkerd"}[1m])) by (le, namespace, authority))`,
 					`sum(increase(response_total{authority="10.1.1.239:9995", direction="inbound", namespace="linkerd"}[1m])) by (namespace, authority, classification, tls)`,
 				},
-				expectedResponse: GenStatSummaryResponse("10.1.1.239:9995", pkgK8s.Authority, "linkerd", nil),
+				expectedResponse: GenStatSummaryResponse("10.1.1.239:9995", pkgK8s.Authority, []string{"linkerd"}, nil),
 			},
 		}
 
