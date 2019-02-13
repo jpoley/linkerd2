@@ -1,6 +1,8 @@
 import PropTypes from 'prop-types';
 import React from 'react';
-import _ from 'lodash';
+import _get from 'lodash/get';
+import _isEmpty from 'lodash/isEmpty';
+import _merge from 'lodash/merge';
 import { withContext } from './AppContext.jsx';
 
 /**
@@ -11,7 +13,7 @@ import { withContext } from './AppContext.jsx';
  * @param {List[string]} options - Options for withREST
  */
 const withREST = (WrappedComponent, componentPromises, options={}) => {
-  const localOptions = _.merge({}, {
+  const localOptions = _merge({}, {
     resetProps: [],
     poll: true,
   }, options);
@@ -45,12 +47,11 @@ const withREST = (WrappedComponent, componentPromises, options={}) => {
     }
 
     componentDidUpdate(prevProps) {
-      const changed = _.filter(
-        localOptions.resetProps,
-        prop => _.get(prevProps, prop) !== _.get(this.props, prop),
+      const changed = localOptions.resetProps.filter(
+        prop => _get(prevProps, prop) !== _get(this.props, prop)
       );
 
-      if (_.isEmpty(changed)) { return; }
+      if (_isEmpty(changed)) { return; }
 
       // React won't unmount this component when switching resource pages so we need to clear state
       this.stopServerPolling();

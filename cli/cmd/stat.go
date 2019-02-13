@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
-	"time"
 
 	"github.com/linkerd/linkerd2/controller/api/util"
 	pb "github.com/linkerd/linkerd2/controller/gen/public"
@@ -19,14 +18,12 @@ import (
 )
 
 type statOptions struct {
-	namespace     string
-	timeWindow    string
+	statOptionsBase
 	toNamespace   string
 	toResource    string
 	fromNamespace string
 	fromResource  string
 	allNamespaces bool
-	outputFormat  string
 }
 
 type indexedResults struct {
@@ -37,14 +34,12 @@ type indexedResults struct {
 
 func newStatOptions() *statOptions {
 	return &statOptions{
-		namespace:     "default",
-		timeWindow:    "1m",
-		toNamespace:   "",
-		toResource:    "",
-		fromNamespace: "",
-		fromResource:  "",
-		allNamespaces: false,
-		outputFormat:  "",
+		statOptionsBase: *newStatOptionsBase(),
+		toNamespace:     "",
+		toResource:      "",
+		fromNamespace:   "",
+		fromResource:    "",
+		allNamespaces:   false,
 	}
 }
 
@@ -64,21 +59,26 @@ func newCmdStat() *cobra.Command {
   Examples:
   * deploy
   * deploy/my-deploy
-  * rc/my-replication-controller
+  * deploy/ po/
+  * ds/my-daemonset
   * ns/my-ns
-  * authority
-  * au/my-authority
   * po/mypod1 rc/my-replication-controller
   * po mypod1 mypod2
+  * rc/my-replication-controller
+  * sts/my-statefulset
+  * authority
+  * au/my-authority
   * all
 
-Valid resource types include:
-
+  Valid resource types include:
+  * daemonsets
   * deployments
   * namespaces
   * pods
   * replicationcontrollers
+  * statefulsets
   * authorities (not supported in --from)
+  * jobs (only supported as a --from or --to)
   * services (only supported if a --from is also specified, or as a --to)
   * all (all resource types, not supported in --from or --to)
 
@@ -126,7 +126,7 @@ If no resource name is specified, displays stats about all resources of the spec
 
 			// The gRPC client is concurrency-safe, so we can reuse it in all the following goroutines
 			// https://github.com/grpc/grpc-go/issues/682
-			client := validatedPublicAPIClient(time.Time{})
+			client := cliPublicAPIClient()
 			c := make(chan indexedResults, len(reqs))
 			for num, req := range reqs {
 				go func(num int, req *pb.StatSummaryRequest) {
@@ -148,7 +148,7 @@ If no resource name is specified, displays stats about all resources of the spec
 				}
 			}
 
-			output := renderStats(totalRows, options)
+			output := renderStatStats(totalRows, options)
 			_, err = fmt.Print(output)
 
 			return err
@@ -189,28 +189,20 @@ func requestStatsFromAPI(client pb.ApiClient, req *pb.StatSummaryRequest, option
 	return resp, nil
 }
 
-func renderStats(rows []*pb.StatTable_PodGroup_Row, options *statOptions) string {
+func renderStatStats(rows []*pb.StatTable_PodGroup_Row, options *statOptions) string {
 	var buffer bytes.Buffer
 	w := tabwriter.NewWriter(&buffer, 0, 0, padding, ' ', tabwriter.AlignRight)
 	writeStatsToBuffer(rows, w, options)
 	w.Flush()
 
-	var out string
-	switch options.outputFormat {
-	case "table", "":
-		// strip left padding on the first column
-		out = string(buffer.Bytes()[padding:])
-		out = strings.Replace(out, "\n"+strings.Repeat(" ", padding), "\n", -1)
-	case "json":
-		out = string(buffer.Bytes())
-	}
-
-	return out
+	return renderStats(buffer, &options.statOptionsBase)
 }
 
 const padding = 3
 
 type rowStats struct {
+	route       string
+	dst         string
 	requestRate float64
 	successRate float64
 	tlsPercent  float64
@@ -276,9 +268,9 @@ func writeStatsToBuffer(rows []*pb.StatTable_PodGroup_Row, w *tabwriter.Writer, 
 
 		if r.Stats != nil {
 			statTables[resourceKey][key].rowStats = &rowStats{
-				requestRate: getRequestRate(*r),
-				successRate: getSuccessRate(*r),
-				tlsPercent:  getPercentTls(*r),
+				requestRate: getRequestRate(r.Stats.GetSuccessCount(), r.Stats.GetFailureCount(), r.TimeWindow),
+				successRate: getSuccessRate(r.Stats.GetSuccessCount(), r.Stats.GetFailureCount()),
+				tlsPercent:  getPercentTLS(r.Stats),
 				latencyP50:  r.Stats.LatencyMsP50,
 				latencyP95:  r.Stats.LatencyMsP95,
 				latencyP99:  r.Stats.LatencyMsP99,
@@ -287,14 +279,14 @@ func writeStatsToBuffer(rows []*pb.StatTable_PodGroup_Row, w *tabwriter.Writer, 
 	}
 
 	switch options.outputFormat {
-	case "table", "":
+	case "table", "wide", "":
 		if len(statTables) == 0 {
 			fmt.Fprintln(os.Stderr, "No traffic found.")
 			os.Exit(0)
 		}
 		printStatTables(statTables, w, maxNameLength, maxNamespaceLength, options)
 	case "json":
-		printStatJson(statTables, w)
+		printStatJSON(statTables, w)
 	}
 }
 
@@ -386,7 +378,7 @@ func namespaceName(resourceType string, key string) (string, string) {
 	return namespace, name
 }
 
-// Using pointers there where the value is NA and the corresponding json is null
+// Using pointers where the value is NA and the corresponding json is null
 type jsonStats struct {
 	Namespace    string   `json:"namespace"`
 	Kind         string   `json:"kind"`
@@ -397,10 +389,10 @@ type jsonStats struct {
 	LatencyMSp50 *uint64  `json:"latency_ms_p50"`
 	LatencyMSp95 *uint64  `json:"latency_ms_p95"`
 	LatencyMSp99 *uint64  `json:"latency_ms_p99"`
-	Tls          *float64 `json:"tls"`
+	TLS          *float64 `json:"tls"`
 }
 
-func printStatJson(statTables map[string]map[string]*row, w *tabwriter.Writer) {
+func printStatJSON(statTables map[string]map[string]*row, w *tabwriter.Writer) {
 	// avoid nil initialization so that if there are not stats it gets marshalled as an empty array vs null
 	entries := []*jsonStats{}
 	for _, resourceType := range k8s.AllResources {
@@ -420,7 +412,7 @@ func printStatJson(statTables map[string]map[string]*row, w *tabwriter.Writer) {
 					entry.LatencyMSp50 = &stats[key].latencyP50
 					entry.LatencyMSp95 = &stats[key].latencyP95
 					entry.LatencyMSp99 = &stats[key].latencyP99
-					entry.Tls = &stats[key].tlsPercent
+					entry.TLS = &stats[key].tlsPercent
 				}
 
 				entries = append(entries, entry)
@@ -438,10 +430,10 @@ func printStatJson(statTables map[string]map[string]*row, w *tabwriter.Writer) {
 func getNamePrefix(resourceType string) string {
 	if resourceType == "" {
 		return ""
-	} else {
-		canonicalType := k8s.ShortNameFromCanonicalResourceName(resourceType)
-		return canonicalType + "/"
 	}
+
+	canonicalType := k8s.ShortNameFromCanonicalResourceName(resourceType)
+	return canonicalType + "/"
 }
 
 func buildStatSummaryRequests(resources []string, options *statOptions) ([]*pb.StatSummaryRequest, error) {
@@ -471,18 +463,20 @@ func buildStatSummaryRequests(resources []string, options *statOptions) ([]*pb.S
 			return nil, err
 		}
 
-		requestParams := util.StatSummaryRequestParams{
-			TimeWindow:    options.timeWindow,
-			ResourceName:  target.Name,
-			ResourceType:  target.Type,
-			Namespace:     options.namespace,
+		requestParams := util.StatsSummaryRequestParams{
+			StatsBaseRequestParams: util.StatsBaseRequestParams{
+				TimeWindow:    options.timeWindow,
+				ResourceName:  target.Name,
+				ResourceType:  target.Type,
+				Namespace:     options.namespace,
+				AllNamespaces: options.allNamespaces,
+			},
 			ToName:        toRes.Name,
 			ToType:        toRes.Type,
 			ToNamespace:   options.toNamespace,
 			FromName:      fromRes.Name,
 			FromType:      fromRes.Type,
 			FromNamespace: options.fromNamespace,
-			AllNamespaces: options.allNamespaces,
 		}
 
 		req, err := util.BuildStatSummaryRequest(requestParams)
@@ -492,35 +486,6 @@ func buildStatSummaryRequests(resources []string, options *statOptions) ([]*pb.S
 		requests = append(requests, req)
 	}
 	return requests, nil
-}
-
-func getRequestRate(r pb.StatTable_PodGroup_Row) float64 {
-	success := r.Stats.SuccessCount
-	failure := r.Stats.FailureCount
-	windowLength, err := time.ParseDuration(r.TimeWindow)
-	if err != nil {
-		log.Error(err.Error())
-		return 0.0
-	}
-	return float64(success+failure) / windowLength.Seconds()
-}
-
-func getSuccessRate(r pb.StatTable_PodGroup_Row) float64 {
-	success := r.Stats.SuccessCount
-	failure := r.Stats.FailureCount
-
-	if success+failure == 0 {
-		return 0.0
-	}
-	return float64(success) / float64(success+failure)
-}
-
-func getPercentTls(r pb.StatTable_PodGroup_Row) float64 {
-	reqTotal := r.Stats.SuccessCount + r.Stats.FailureCount
-	if reqTotal == 0 {
-		return 0.0
-	}
-	return float64(r.Stats.TlsRequestCount) / float64(reqTotal)
 }
 
 func sortStatsKeys(stats map[string]*row) []string {
@@ -547,11 +512,7 @@ func (o *statOptions) validate(resourceType string) error {
 		}
 	}
 
-	if err := o.validateOutputFormat(); err != nil {
-		return err
-	}
-
-	return nil
+	return o.validateOutputFormat()
 }
 
 // validateConflictingFlags validates that the options do not contain mutually
@@ -586,13 +547,4 @@ func (o *statOptions) validateNamespaceFlags() error {
 	}
 
 	return nil
-}
-
-func (o *statOptions) validateOutputFormat() error {
-	switch o.outputFormat {
-	case "table", "json", "":
-		return nil
-	default:
-		return fmt.Errorf("--output currently only supports table and json")
-	}
 }

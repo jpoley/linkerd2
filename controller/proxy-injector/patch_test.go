@@ -1,7 +1,6 @@
 package injector
 
 import (
-	"fmt"
 	"reflect"
 	"testing"
 
@@ -36,23 +35,20 @@ func TestPatch(t *testing.T) {
 	var (
 		controllerNamespace = "linkerd"
 		createdBy           = "linkerd/cli v18.8.4"
-		initContainerIndex  = 5
 	)
 
 	actual := NewPatch()
 	actual.addContainer(sidecar)
 	actual.addInitContainerRoot()
-	actual.addInitContainer(init, initContainerIndex)
+	actual.addInitContainer(init)
 	actual.addVolumeRoot()
 	actual.addVolume(trustAnchors)
 	actual.addVolume(secrets)
 	actual.addPodLabels(map[string]string{
-		k8sPkg.ControllerNSLabel:    controllerNamespace,
-		k8sPkg.ProxyAutoInjectLabel: k8sPkg.ProxyAutoInjectCompleted,
+		k8sPkg.ControllerNSLabel: controllerNamespace,
 	})
 	actual.addDeploymentLabels(map[string]string{
-		k8sPkg.ControllerNSLabel:    controllerNamespace,
-		k8sPkg.ProxyAutoInjectLabel: k8sPkg.ProxyAutoInjectCompleted,
+		k8sPkg.ControllerNSLabel: controllerNamespace,
 	})
 	actual.addPodAnnotations(map[string]string{
 		k8sPkg.CreatedByAnnotation: createdBy,
@@ -62,17 +58,15 @@ func TestPatch(t *testing.T) {
 	expected.patchOps = []*patchOp{
 		&patchOp{Op: "add", Path: patchPathContainer, Value: sidecar},
 		&patchOp{Op: "add", Path: patchPathInitContainerRoot, Value: []*v1.Container{}},
-		&patchOp{Op: "add", Path: fmt.Sprintf(patchPathInitContainer, initContainerIndex), Value: init},
+		&patchOp{Op: "add", Path: patchPathInitContainer, Value: init},
 		&patchOp{Op: "add", Path: patchPathVolumeRoot, Value: []*v1.Volume{}},
 		&patchOp{Op: "add", Path: patchPathVolume, Value: trustAnchors},
 		&patchOp{Op: "add", Path: patchPathVolume, Value: secrets},
 		&patchOp{Op: "add", Path: patchPathPodLabels, Value: map[string]string{
-			k8sPkg.ControllerNSLabel:    controllerNamespace,
-			k8sPkg.ProxyAutoInjectLabel: k8sPkg.ProxyAutoInjectCompleted,
+			k8sPkg.ControllerNSLabel: controllerNamespace,
 		}},
 		&patchOp{Op: "add", Path: patchPathDeploymentLabels, Value: map[string]string{
-			k8sPkg.ControllerNSLabel:    controllerNamespace,
-			k8sPkg.ProxyAutoInjectLabel: k8sPkg.ProxyAutoInjectCompleted,
+			k8sPkg.ControllerNSLabel: controllerNamespace,
 		}},
 		&patchOp{Op: "add", Path: patchPathPodAnnotations, Value: map[string]string{k8sPkg.CreatedByAnnotation: createdBy}},
 	}

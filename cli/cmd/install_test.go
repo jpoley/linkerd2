@@ -16,6 +16,7 @@ func TestRender(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unexpected error from validateAndBuildConfig(): %v", err)
 	}
+
 	defaultConfig.UUID = "deaab91a-f4ab-448a-b7d1-c832a2fa0a60"
 
 	// A configuration that shows that all config setting strings are honored
@@ -26,10 +27,10 @@ func TestRender(t *testing.T) {
 		ControllerImage:                  "ControllerImage",
 		WebImage:                         "WebImage",
 		PrometheusImage:                  "PrometheusImage",
+		PrometheusVolumeName:             "data",
 		GrafanaImage:                     "GrafanaImage",
+		GrafanaVolumeName:                "data",
 		ControllerReplicas:               1,
-		WebReplicas:                      2,
-		PrometheusReplicas:               3,
 		ImagePullPolicy:                  "ImagePullPolicy",
 		UUID:                             "UUID",
 		CliVersion:                       "CliVersion",
@@ -38,6 +39,8 @@ func TestRender(t *testing.T) {
 		CreatedByAnnotation:              "CreatedByAnnotation",
 		ProxyAPIPort:                     123,
 		EnableTLS:                        true,
+		TLSTrustAnchorVolumeName:         "TLSTrustAnchorVolumeName",
+		TLSSecretsVolumeName:             "TLSSecretsVolumeName",
 		TLSTrustAnchorConfigMapName:      "TLSTrustAnchorConfigMapName",
 		ProxyContainerName:               "ProxyContainerName",
 		TLSTrustAnchorFileName:           "TLSTrustAnchorFileName",
@@ -46,23 +49,28 @@ func TestRender(t *testing.T) {
 		TLSTrustAnchorVolumeSpecFileName: "TLSTrustAnchorVolumeSpecFileName",
 		TLSIdentityVolumeSpecFileName:    "TLSIdentityVolumeSpecFileName",
 		ProxyAutoInjectEnabled:           true,
-		ProxyAutoInjectLabel:             "ProxyAutoInjectLabel",
+		ProxyInjectAnnotation:            "ProxyInjectAnnotation",
+		ProxyInjectDisabled:              "ProxyInjectDisabled",
+		ProxyLogLevel:                    "ProxyLogLevel",
 		ProxyUID:                         2102,
+		ControllerUID:                    2103,
 		InboundPort:                      4143,
 		OutboundPort:                     4140,
+		InboundAcceptKeepaliveMs:         10000,
+		OutboundConnectKeepaliveMs:       10000,
 		ProxyControlPort:                 4190,
 		ProxyMetricsPort:                 4191,
 		ProxyInitImage:                   "ProxyInitImage",
 		ProxyImage:                       "ProxyImage",
-		ProxyInjectorTLSSecret:           "ProxyInjectorTLSSecret",
-		ProxyInjectorSidecarConfig:       "ProxyInjectorSidecarConfig",
 		ProxySpecFileName:                "ProxySpecFileName",
 		ProxyInitSpecFileName:            "ProxyInitSpecFileName",
 		IgnoreInboundPorts:               "4190,4191,1,2,3",
 		IgnoreOutboundPorts:              "2,3,4",
 		ProxyResourceRequestCPU:          "RequestCPU",
 		ProxyResourceRequestMemory:       "RequestMemory",
-		ProxyBindTimeout:                 "1m",
+		ProfileSuffixes:                  "suffix.",
+		EnableH2Upgrade:                  true,
+		NoInitContainer:                  false,
 	}
 
 	singleNamespaceConfig := installConfig{
@@ -70,10 +78,10 @@ func TestRender(t *testing.T) {
 		ControllerImage:                  "ControllerImage",
 		WebImage:                         "WebImage",
 		PrometheusImage:                  "PrometheusImage",
+		PrometheusVolumeName:             "data",
 		GrafanaImage:                     "GrafanaImage",
+		GrafanaVolumeName:                "data",
 		ControllerReplicas:               1,
-		WebReplicas:                      2,
-		PrometheusReplicas:               3,
 		ImagePullPolicy:                  "ImagePullPolicy",
 		UUID:                             "UUID",
 		CliVersion:                       "CliVersion",
@@ -81,7 +89,11 @@ func TestRender(t *testing.T) {
 		ControllerComponentLabel:         "ControllerComponentLabel",
 		CreatedByAnnotation:              "CreatedByAnnotation",
 		ProxyAPIPort:                     123,
+		ProxyUID:                         2102,
+		ControllerUID:                    2103,
 		EnableTLS:                        true,
+		InboundAcceptKeepaliveMs:         10000,
+		OutboundConnectKeepaliveMs:       10000,
 		TLSTrustAnchorConfigMapName:      "TLSTrustAnchorConfigMapName",
 		ProxyContainerName:               "ProxyContainerName",
 		TLSTrustAnchorFileName:           "TLSTrustAnchorFileName",
@@ -90,16 +102,48 @@ func TestRender(t *testing.T) {
 		TLSTrustAnchorVolumeSpecFileName: "TLSTrustAnchorVolumeSpecFileName",
 		TLSIdentityVolumeSpecFileName:    "TLSIdentityVolumeSpecFileName",
 		SingleNamespace:                  true,
+		EnableH2Upgrade:                  true,
+		NoInitContainer:                  false,
 	}
+
+	haOptions := newInstallOptions()
+	haOptions.highAvailability = true
+	haConfig, _ := validateAndBuildConfig(haOptions)
+	haConfig.UUID = "deaab91a-f4ab-448a-b7d1-c832a2fa0a60"
+
+	haWithOverridesOptions := newInstallOptions()
+	haWithOverridesOptions.highAvailability = true
+	haWithOverridesOptions.controllerReplicas = 2
+	haWithOverridesOptions.proxyCPURequest = "400m"
+	haWithOverridesOptions.proxyMemoryRequest = "300Mi"
+	haWithOverridesConfig, _ := validateAndBuildConfig(haWithOverridesOptions)
+	haWithOverridesConfig.UUID = "deaab91a-f4ab-448a-b7d1-c832a2fa0a60"
+
+	noInitContainerOptions := newInstallOptions()
+	noInitContainerOptions.noInitContainer = true
+	noInitContainerConfig, _ := validateAndBuildConfig(noInitContainerOptions)
+	noInitContainerConfig.UUID = "deaab91a-f4ab-448a-b7d1-c832a2fa0a60"
+
+	noInitContainerWithProxyAutoInjectOptions := newInstallOptions()
+	noInitContainerWithProxyAutoInjectOptions.noInitContainer = true
+	noInitContainerWithProxyAutoInjectOptions.proxyAutoInject = true
+	noInitContainerWithProxyAutoInjectOptions.tls = "optional"
+	noInitContainerWithProxyAutoInjectConfig, _ := validateAndBuildConfig(noInitContainerWithProxyAutoInjectOptions)
+	noInitContainerWithProxyAutoInjectConfig.UUID = "deaab91a-f4ab-448a-b7d1-c832a2fa0a60"
 
 	testCases := []struct {
 		config                installConfig
+		options               *installOptions
 		controlPlaneNamespace string
 		goldenFileName        string
 	}{
-		{*defaultConfig, defaultControlPlaneNamespace, "testdata/install_default.golden"},
-		{metaConfig, metaConfig.Namespace, "testdata/install_output.golden"},
-		{singleNamespaceConfig, singleNamespaceConfig.Namespace, "testdata/install_single_namespace_output.golden"},
+		{*defaultConfig, defaultOptions, defaultControlPlaneNamespace, "testdata/install_default.golden"},
+		{metaConfig, defaultOptions, metaConfig.Namespace, "testdata/install_output.golden"},
+		{singleNamespaceConfig, defaultOptions, singleNamespaceConfig.Namespace, "testdata/install_single_namespace_output.golden"},
+		{*haConfig, haOptions, haConfig.Namespace, "testdata/install_ha_output.golden"},
+		{*haWithOverridesConfig, haWithOverridesOptions, haWithOverridesConfig.Namespace, "testdata/install_ha_with_overrides_output.golden"},
+		{*noInitContainerConfig, noInitContainerOptions, noInitContainerConfig.Namespace, "testdata/install_no_init_container.golden"},
+		{*noInitContainerWithProxyAutoInjectConfig, noInitContainerWithProxyAutoInjectOptions, noInitContainerWithProxyAutoInjectConfig.Namespace, "testdata/install_no_init_container_auto_inject.golden"},
 	}
 
 	for i, tc := range testCases {
@@ -107,7 +151,7 @@ func TestRender(t *testing.T) {
 			controlPlaneNamespace = tc.controlPlaneNamespace
 
 			var buf bytes.Buffer
-			err := render(tc.config, &buf, defaultOptions)
+			err := render(tc.config, &buf, tc.options)
 			if err != nil {
 				t.Fatalf("Unexpected error: %v", err)
 			}

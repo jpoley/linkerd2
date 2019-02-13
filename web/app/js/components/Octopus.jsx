@@ -12,12 +12,40 @@ import TableBody from '@material-ui/core/TableBody';
 import TableCell from '@material-ui/core/TableCell';
 import TableRow from '@material-ui/core/TableRow';
 import Typography from '@material-ui/core/Typography';
-import _ from 'lodash';
+import _ceil from 'lodash/ceil';
+import _floor from 'lodash/floor';
+import _get from 'lodash/get';
+import _isEmpty from 'lodash/isEmpty';
+import _isNil from 'lodash/isNil';
+import _size from 'lodash/size';
+import _slice from 'lodash/slice';
+import _sortBy from 'lodash/sortBy';
+import _take from 'lodash/take';
+import _times from 'lodash/times';
 import { getSuccessRateClassification } from './util/MetricUtils.jsx' ;
+import { withStyles } from "@material-ui/core/styles";
 
 const maxNumNeighbors = 6; // max number of neighbor nodes to show in the octopus graph
 
-export default class Octopus extends React.Component {
+const styles = () => ({
+  graphContainer: {
+    overflowX: "scroll",
+    padding: "16px 0"
+  },
+  graph: {
+    maxWidth: "974px",
+    minWidth: "974px",
+    marginLeft: "auto",
+    marginRight: "auto"
+  },
+  centerNode: {
+    width: "244px"
+  },
+  neighborNode: {
+    width: "220px"
+  }
+});
+class Octopus extends React.Component {
   static defaultProps = {
     neighbors: {},
     resource: {},
@@ -25,6 +53,7 @@ export default class Octopus extends React.Component {
   }
 
   static propTypes = {
+    classes: PropTypes.shape({}).isRequired,
     neighbors: PropTypes.shape({}),
     resource: PropTypes.shape({}),
     unmeshedSources: PropTypes.arrayOf(PropTypes.shape({})),
@@ -33,8 +62,11 @@ export default class Octopus extends React.Component {
   getNeighborDisplayData = neighbors => {
     // only display maxNumNeighbors neighboring nodes in the octopus graph,
     // otherwise it will be really tall
-    let upstreams = _.sortBy(neighbors.upstream, "resource.successRate");
-    let downstreams = _.sortBy(neighbors.downstream, "resource.successRate");
+    // even though _sortBy is a stable sort, the order that this data is returned by the API
+    // can change, so the original order of items can change; this means we have to sort by
+    // name and by SR to ensure an actual stable sort
+    let upstreams = _sortBy(_sortBy(neighbors.upstream, displayName), n => n.successRate);
+    let downstreams = _sortBy(_sortBy(neighbors.downstream, displayName), n => n.successRate);
 
     let display = {
       upstreams: {
@@ -47,34 +79,35 @@ export default class Octopus extends React.Component {
       }
     };
 
-    if (_.size(upstreams) > maxNumNeighbors) {
-      display.upstreams.displayed = _.take(upstreams, maxNumNeighbors);
-      display.upstreams.collapsed = _.slice(upstreams, maxNumNeighbors, _.size(upstreams));
+    if (_size(upstreams) > maxNumNeighbors) {
+      display.upstreams.displayed = _take(upstreams, maxNumNeighbors);
+      display.upstreams.collapsed = _slice(upstreams, maxNumNeighbors, _size(upstreams));
     }
 
-    if (_.size(downstreams) > maxNumNeighbors) {
-      display.downstreams.displayed = _.take(downstreams, maxNumNeighbors);
-      display.downstreams.collapsed = _.slice(downstreams, maxNumNeighbors, _.size(downstreams));
+    if (_size(downstreams) > maxNumNeighbors) {
+      display.downstreams.displayed = _take(downstreams, maxNumNeighbors);
+      display.downstreams.collapsed = _slice(downstreams, maxNumNeighbors, _size(downstreams));
     }
 
     return display;
   }
 
   linkedResourceTitle = (resource, display) => {
-    return _.isNil(resource.namespace) ? display :
+    return _isNil(resource.namespace) ? display :
     <this.props.api.ResourceLink
       resource={resource}
       linkText={display} />;
   }
 
   renderResourceCard(resource, type) {
+    const { classes } = this.props;
     let display = displayName(resource);
     let classification = getSuccessRateClassification(resource.successRate);
     let Progress = StyledProgress(classification);
 
     return (
-      <Grid item key={resource.name} >
-        <Card className={`octopus-body-node ${type}`} title={display}>
+      <Grid item key={resource.type + "-" + resource.name} >
+        <Card className={type === "neighbor" ? classes.neighborNode : classes.centerNode} title={display}>
           <CardContent>
 
             <Typography variant={type === "neighbor" ? "subtitle1" : "h6"} align="center">
@@ -95,7 +128,7 @@ export default class Octopus extends React.Component {
                 </TableRow>
                 <TableRow>
                   <TableCell><Typography>P99</Typography></TableCell>
-                  <TableCell numeric={true}><Typography>{metricToFormatter["LATENCY"](_.get(resource, "latency.P99"))}</Typography></TableCell>
+                  <TableCell numeric={true}><Typography>{metricToFormatter["LATENCY"](_get(resource, "latency.P99"))}</Typography></TableCell>
                 </TableRow>
               </TableBody>
             </Table>
@@ -106,13 +139,14 @@ export default class Octopus extends React.Component {
   }
 
   renderUnmeshedResources = unmeshedResources => {
+    const { classes } = this.props;
     return (
       <Grid item>
-        <Card key="unmeshed-resources" className="octopus-body-node neighbor">
+        <Card key="unmeshed-resources" className={classes.neighborNode}>
           <CardContent>
             <Typography variant="subtitle1">Unmeshed</Typography>
             {
-              _.map(unmeshedResources, r => {
+              unmeshedResources.map(r => {
                 let display = displayName(r);
                 return <Typography key={display} variant="body2" title={display}>{display}</Typography>;
               })
@@ -124,12 +158,13 @@ export default class Octopus extends React.Component {
   }
 
   renderCollapsedNeighbors = neighbors => {
+    const { classes } = this.props;
     return (
       <Grid item>
-        <Card className="octopus-body-node neighbor">
+        <Card className={classes.neighborNode}>
           <CardContent>
             {
-              _.map(neighbors, r => {
+              neighbors.map(r => {
                 let display = displayName(r);
                 return <Typography key={display}>{this.linkedResourceTitle(r, display)}</Typography>;
               })
@@ -144,16 +179,16 @@ export default class Octopus extends React.Component {
     let width = 80;
     let showArrow = numNeighbors > 0;
     let isEven = numNeighbors % 2 === 0;
-    let middleElementIndex = isEven ? ((numNeighbors - 1) / 2) : _.floor(numNeighbors / 2);
+    let middleElementIndex = isEven ? ((numNeighbors - 1) / 2) : _floor(numNeighbors / 2);
 
-    let arrowTypes = _.map(_.times(numNeighbors), i => {
+    let arrowTypes = _times(numNeighbors, i => i).map(i => {
       if (i < middleElementIndex) {
-        let height = (_.ceil(middleElementIndex - i) - 1) * baseHeight + (baseHeight / 2);
+        let height = (_ceil(middleElementIndex - i) - 1) * baseHeight + (baseHeight / 2);
         return { type: "up", inboundType: "down", height };
       } else if (i === middleElementIndex) {
         return { type: "flat", inboundType: "flat", height: baseHeight };
       } else {
-        let height = (_.ceil(i - middleElementIndex) - 1) * baseHeight + (baseHeight / 2);
+        let height = (_ceil(i - middleElementIndex) - 1) * baseHeight + (baseHeight / 2);
         return { type: "down", inboundType: "up", height };
       }
     });
@@ -163,7 +198,7 @@ export default class Octopus extends React.Component {
       <svg height={height} width={width} version="1.1" viewBox={`0 0 ${width} ${height}`}>
         <defs />
         {
-          _.map(arrowTypes, arrow => {
+          arrowTypes.map(arrow => {
             let arrowType = isOutbound ? arrow.type : arrow.inboundType;
             return OctopusArms[arrowType](width, height, arrow.height, isOutbound, isEven);
           })
@@ -175,23 +210,23 @@ export default class Octopus extends React.Component {
   }
 
   render() {
-    let { resource, neighbors, unmeshedSources } = this.props;
+    let { resource, neighbors, unmeshedSources, classes} = this.props;
 
-    if (_.isEmpty(resource)) {
+    if (_isEmpty(resource)) {
       return null;
     }
 
     let display = this.getNeighborDisplayData(neighbors);
 
-    let numUpstreams = _.size(display.upstreams.displayed) + (_.isEmpty(unmeshedSources) ? 0 : 1) +
-      (_.isEmpty(display.upstreams.collapsed) ? 0 : 1);
+    let numUpstreams = _size(display.upstreams.displayed) + (_isEmpty(unmeshedSources) ? 0 : 1) +
+      (_isEmpty(display.upstreams.collapsed) ? 0 : 1);
 
-    let numDownstreams = _.size(display.downstreams.displayed) + (_.isEmpty(display.downstreams.collapsed) ? 0 : 1);
+    let numDownstreams = _size(display.downstreams.displayed) + (_isEmpty(display.downstreams.collapsed) ? 0 : 1);
 
 
     return (
-      <div className="octopus-graph-container">
-        <div className="octopus-graph">
+      <div className={classes.graphContainer}>
+        <div className={classes.graph}>
           <Grid
             container
             direction="row"
@@ -207,9 +242,9 @@ export default class Octopus extends React.Component {
               alignItems="center"
               item
               xs={3}>
-              {_.map(display.upstreams.displayed, n => this.renderResourceCard(n, "neighbor"))}
-              {_.isEmpty(unmeshedSources) ? null : this.renderUnmeshedResources(unmeshedSources)}
-              {_.isEmpty(display.upstreams.collapsed) ? null : this.renderCollapsedNeighbors(display.upstreams.collapsed)}
+              {display.upstreams.displayed.map(n => this.renderResourceCard(n, "neighbor"))}
+              {_isEmpty(unmeshedSources) ? null : this.renderUnmeshedResources(unmeshedSources)}
+              {_isEmpty(display.upstreams.collapsed) ? null : this.renderCollapsedNeighbors(display.upstreams.collapsed)}
             </Grid>
 
             <Grid item xs={1}>
@@ -233,8 +268,8 @@ export default class Octopus extends React.Component {
               alignItems="center"
               item
               xs={3}>
-              {_.map(display.downstreams.displayed, n => this.renderResourceCard(n, "neighbor"))}
-              {_.isEmpty(display.downstreams.collapsed) ? null : this.renderCollapsedNeighbors(display.downstreams.collapsed)}
+              { display.downstreams.displayed.map(n => this.renderResourceCard(n, "neighbor"))}
+              {_isEmpty(display.downstreams.collapsed) ? null : this.renderCollapsedNeighbors(display.downstreams.collapsed)}
             </Grid>
           </Grid>
         </div>
@@ -242,3 +277,5 @@ export default class Octopus extends React.Component {
     );
   }
 }
+
+export default withStyles(styles)(Octopus);

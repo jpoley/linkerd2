@@ -7,6 +7,7 @@ import (
 
 	pb "github.com/linkerd/linkerd2-proxy-api/go/destination"
 	"github.com/linkerd/linkerd2-proxy-api/go/net"
+	pkgAddr "github.com/linkerd/linkerd2/pkg/addr"
 	pkgK8s "github.com/linkerd/linkerd2/pkg/k8s"
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -65,12 +66,13 @@ func defaultOwnerKindAndName(pod *v1.Pod) (string, string) {
 
 func TestEndpointListener(t *testing.T) {
 	t.Run("Sends one update for add and another for remove", func(t *testing.T) {
-		mockGetServer := &mockDestination_GetServer{updatesReceived: []*pb.Update{}}
-
-		listener := &endpointListener{
-			stream:           mockGetServer,
-			ownerKindAndName: defaultOwnerKindAndName,
-		}
+		mockGetServer := &mockDestinationGetServer{updatesReceived: []*pb.Update{}}
+		listener := newEndpointListener(
+			mockGetServer,
+			defaultOwnerKindAndName,
+			false,
+			false,
+		)
 
 		listener.Update(add, remove)
 
@@ -82,12 +84,13 @@ func TestEndpointListener(t *testing.T) {
 	})
 
 	t.Run("Sends addresses as removed or added", func(t *testing.T) {
-		mockGetServer := &mockDestination_GetServer{updatesReceived: []*pb.Update{}}
-
-		listener := &endpointListener{
-			stream:           mockGetServer,
-			ownerKindAndName: defaultOwnerKindAndName,
-		}
+		mockGetServer := &mockDestinationGetServer{updatesReceived: []*pb.Update{}}
+		listener := newEndpointListener(
+			mockGetServer,
+			defaultOwnerKindAndName,
+			false,
+			false,
+		)
 
 		listener.Update(add, remove)
 
@@ -117,16 +120,18 @@ func TestEndpointListener(t *testing.T) {
 
 	t.Run("It returns when the underlying context is done", func(t *testing.T) {
 		context, cancelFn := context.WithCancel(context.Background())
-		mockGetServer := &mockDestination_GetServer{
+		mockGetServer := &mockDestinationGetServer{
 			updatesReceived: []*pb.Update{},
-			mockDestination_Server: mockDestination_Server{
+			mockDestinationServer: mockDestinationServer{
 				contextToReturn: context,
 			},
 		}
-		listener := &endpointListener{
-			stream:           mockGetServer,
-			ownerKindAndName: defaultOwnerKindAndName,
-		}
+		listener := newEndpointListener(
+			mockGetServer,
+			defaultOwnerKindAndName,
+			false,
+			false,
+		)
 
 		completed := make(chan bool)
 		go func() {
@@ -163,14 +168,16 @@ func TestEndpointListener(t *testing.T) {
 			return "replicationcontroller", expectedReplicationControllerName
 		}
 
-		mockGetServer := &mockDestination_GetServer{updatesReceived: []*pb.Update{}}
-		listener := &endpointListener{
-			ownerKindAndName: ownerKindAndName,
-			labels: map[string]string{
-				"service":   expectedServiceName,
-				"namespace": expectedNamespace,
-			},
-			stream: mockGetServer,
+		mockGetServer := &mockDestinationGetServer{updatesReceived: []*pb.Update{}}
+		listener := newEndpointListener(
+			mockGetServer,
+			ownerKindAndName,
+			false,
+			false,
+		)
+		listener.labels = map[string]string{
+			"service":   expectedServiceName,
+			"namespace": expectedNamespace,
 		}
 
 		add := []*updateAddress{
@@ -186,7 +193,7 @@ func TestEndpointListener(t *testing.T) {
 
 		actualAddedAddress1MetricLabels := mockGetServer.updatesReceived[0].GetAdd().Addrs[0].MetricLabels
 		expectedAddedAddress1MetricLabels := map[string]string{
-			"pod": expectedPodName,
+			"pod":                   expectedPodName,
 			"replicationcontroller": expectedReplicationControllerName,
 		}
 		if !reflect.DeepEqual(actualAddedAddress1MetricLabels, expectedAddedAddress1MetricLabels) {
@@ -199,7 +206,7 @@ func TestEndpointListener(t *testing.T) {
 		expectedPodNamespace := "this-namespace"
 		expectedControllerNamespace := "linkerd-namespace"
 		expectedPodDeployment := "pod-deployment"
-		expectedTlsIdentity := &pb.TlsIdentity_K8SPodIdentity{
+		expectedTLSIdentity := &pb.TlsIdentity_K8SPodIdentity{
 			PodIdentity:  "pod-deployment.deployment.this-namespace.linkerd-managed.linkerd-namespace.svc.cluster.local",
 			ControllerNs: "linkerd-namespace",
 		}
@@ -222,12 +229,13 @@ func TestEndpointListener(t *testing.T) {
 			return "deployment", expectedPodDeployment
 		}
 
-		mockGetServer := &mockDestination_GetServer{updatesReceived: []*pb.Update{}}
-		listener := &endpointListener{
-			ownerKindAndName: ownerKindAndName,
-			stream:           mockGetServer,
-			enableTLS:        true,
-		}
+		mockGetServer := &mockDestinationGetServer{updatesReceived: []*pb.Update{}}
+		listener := newEndpointListener(
+			mockGetServer,
+			ownerKindAndName,
+			true,
+			false,
+		)
 
 		add := []*updateAddress{
 			&updateAddress{address: addedAddress1, pod: podForAddedAddress1},
@@ -239,9 +247,9 @@ func TestEndpointListener(t *testing.T) {
 			t.Fatalf("Expected [1] address returned, got %v", addrs)
 		}
 
-		actualTlsIdentity := addrs[0].GetTlsIdentity().GetK8SPodIdentity()
-		if !reflect.DeepEqual(actualTlsIdentity, expectedTlsIdentity) {
-			t.Fatalf("Expected TlsIdentity to be [%v] but was [%v]", expectedTlsIdentity, actualTlsIdentity)
+		actualTLSIdentity := addrs[0].GetTlsIdentity().GetK8SPodIdentity()
+		if !reflect.DeepEqual(actualTLSIdentity, expectedTLSIdentity) {
+			t.Fatalf("Expected TlsIdentity to be [%v] but was [%v]", expectedTLSIdentity, actualTLSIdentity)
 		}
 	})
 
@@ -269,11 +277,13 @@ func TestEndpointListener(t *testing.T) {
 			return "deployment", expectedPodDeployment
 		}
 
-		mockGetServer := &mockDestination_GetServer{updatesReceived: []*pb.Update{}}
-		listener := &endpointListener{
-			ownerKindAndName: ownerKindAndName,
-			stream:           mockGetServer,
-		}
+		mockGetServer := &mockDestinationGetServer{updatesReceived: []*pb.Update{}}
+		listener := newEndpointListener(
+			mockGetServer,
+			ownerKindAndName,
+			false,
+			false,
+		)
 
 		add := []*updateAddress{
 			&updateAddress{address: addedAddress1, pod: podForAddedAddress1},
@@ -291,10 +301,20 @@ func TestEndpointListener(t *testing.T) {
 	})
 }
 
+func TestUpdateAddress(t *testing.T) {
+	t.Run("Correctly clones an update address", func(t *testing.T) {
+		ua := updateAddress{address: addedAddress1, pod: pod1}
+		ua2 := ua.clone()
+		if !reflect.DeepEqual(ua, *ua2) {
+			t.Fatalf("Clone failed, original: %+v, clone: %+v", ua, ua2)
+		}
+	})
+}
+
 func checkAddress(t *testing.T, addr *pb.WeightedAddr, expectedAddress *net.TcpAddress) {
 	actualAddress := addr.Addr
 	actualWeight := addr.Weight
-	expectedWeight := uint32(1)
+	expectedWeight := uint32(pkgAddr.DefaultWeight)
 
 	if !reflect.DeepEqual(actualAddress, expectedAddress) || actualWeight != expectedWeight {
 		t.Fatalf("Expected added address to be [%+v] and weight to be [%d], but it was [%+v] and [%d]", expectedAddress, expectedWeight, actualAddress, actualWeight)

@@ -47,16 +47,15 @@ func TestCertificateController(t *testing.T) {
 			t.Fatal("timed out waiting for sync")
 		}
 
-		actions := controller.k8sAPI.Client.(*fake.Clientset).Actions()
-		action := actions[len(actions)-2] // configmap create
-
-		if !action.Matches("create", "configmaps") {
-			t.Fatalf("expected action to be configmap create, got: %+v", action)
+		var found bool
+		for _, a := range controller.k8sAPI.Client.(*fake.Clientset).Actions() {
+			if a.Matches("create", "configmaps") && a.GetNamespace() == injectedNS {
+				found = true
+			}
 		}
 
-		if action.GetNamespace() != injectedNS {
-			t.Fatalf("expected action to happen in [%s] namespace, got [%s] namespace",
-				injectedNS, action.GetNamespace())
+		if !found {
+			t.Fatalf("configmap create event not found in [%s] namespace", injectedNS)
 		}
 	})
 }
@@ -67,7 +66,7 @@ func new(fixtures ...string) (*CertificateController, chan bool, chan struct{}, 
 		return nil, nil, nil, fmt.Errorf("NewFakeAPI returned an error: %s", err)
 	}
 
-	controller, err := NewCertificateController(controllerNS, k8sAPI, false)
+	controller, err := NewCertificateController(controllerNS, k8sAPI)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("NewCertificateController returned an error: %s", err)
 	}
@@ -79,12 +78,10 @@ func new(fixtures ...string) (*CertificateController, chan bool, chan struct{}, 
 		return err
 	}
 
-	controller.k8sAPI.Sync(nil)
+	controller.k8sAPI.Sync()
 
 	stopCh := make(chan struct{})
-	ready := make(chan struct{})
-	close(ready)
-	go controller.Run(ready, stopCh)
+	go controller.Run(stopCh)
 
 	return controller, synced, stopCh, nil
 }

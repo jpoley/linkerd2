@@ -8,11 +8,13 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
+// These constants are string representations of Kubernetes resource types.
 const (
 	All                   = "all"
 	Authority             = "authority"
 	DaemonSet             = "daemonset"
 	Deployment            = "deployment"
+	Job                   = "job"
 	Namespace             = "namespace"
 	Pod                   = "pod"
 	ReplicationController = "replicationcontroller"
@@ -20,6 +22,9 @@ const (
 	Service               = "service"
 	ServiceProfile        = "serviceprofile"
 	StatefulSet           = "statefulset"
+
+	// special case k8s job label, to not conflict with Prometheus' job label
+	l5dJob = "k8s_job"
 )
 
 // AllResources is a sorted list of all resources defined as constants above.
@@ -27,6 +32,7 @@ var AllResources = []string{
 	Authority,
 	DaemonSet,
 	Deployment,
+	Job,
 	Namespace,
 	Pod,
 	ReplicationController,
@@ -36,9 +42,11 @@ var AllResources = []string{
 	StatefulSet,
 }
 
-// resources to query in StatSummary when Resource.Type is "all"
+// StatAllResourceTypes represents the resources to query in StatSummary when Resource.Type is "all"
 var StatAllResourceTypes = []string{
 	// TODO: add Namespace here to decrease queries from the web process
+	DaemonSet,
+	StatefulSet,
 	Deployment,
 	ReplicationController,
 	Pod,
@@ -46,12 +54,12 @@ var StatAllResourceTypes = []string{
 	Authority,
 }
 
-func generateKubernetesApiBaseUrlFor(schemeHostAndPort string, namespace string, extraPathStartingWithSlash string) (*url.URL, error) {
+func generateKubernetesAPIBaseURLFor(schemeHostAndPort string, namespace string, extraPathStartingWithSlash string) (*url.URL, error) {
 	if string(extraPathStartingWithSlash[0]) != "/" {
 		return nil, fmt.Errorf("Path must start with a [/], was [%s]", extraPathStartingWithSlash)
 	}
 
-	baseURL, err := generateBaseKubernetesApiUrl(schemeHostAndPort)
+	baseURL, err := generateBaseKubernetesAPIURL(schemeHostAndPort)
 	if err != nil {
 		return nil, err
 	}
@@ -65,13 +73,8 @@ func generateKubernetesApiBaseUrlFor(schemeHostAndPort string, namespace string,
 	return url, nil
 }
 
-func generateBaseKubernetesApiUrl(schemeHostAndPort string) (*url.URL, error) {
-	urlString := fmt.Sprintf("%s/api/v1/", schemeHostAndPort)
-	url, err := url.Parse(urlString)
-	if err != nil {
-		return nil, fmt.Errorf("error generating base URL for Kubernetes API from [%s]", urlString)
-	}
-	return url, nil
+func generateBaseKubernetesAPIURL(schemeHostAndPort string) (*url.URL, error) {
+	return BuildURL(schemeHostAndPort, "/api/v1/")
 }
 
 // GetConfig returns kubernetes config based on the current environment.
@@ -94,22 +97,28 @@ func GetConfig(fpath, kubeContext string) (*rest.Config, error) {
 // This also works for non-k8s resources, e.g. authorities
 func CanonicalResourceNameFromFriendlyName(friendlyName string) (string, error) {
 	switch friendlyName {
-	case "deploy", "deployment", "deployments":
-		return Deployment, nil
+	case "au", "authority", "authorities":
+		return Authority, nil
 	case "ds", "daemonset", "daemonsets":
 		return DaemonSet, nil
+	case "deploy", "deployment", "deployments":
+		return Deployment, nil
+	case "job", "jobs":
+		return Job, nil
 	case "ns", "namespace", "namespaces":
 		return Namespace, nil
 	case "po", "pod", "pods":
 		return Pod, nil
 	case "rc", "replicationcontroller", "replicationcontrollers":
 		return ReplicationController, nil
+	case "rs", "replicaset", "replicasets":
+		return ReplicaSet, nil
 	case "svc", "service", "services":
 		return Service, nil
+	case "sp", "serviceprofile", "serviceprofiles":
+		return ServiceProfile, nil
 	case "sts", "statefulset", "statefulsets":
 		return StatefulSet, nil
-	case "au", "authority", "authorities":
-		return Authority, nil
 	case "all":
 		return All, nil
 	}
@@ -117,14 +126,18 @@ func CanonicalResourceNameFromFriendlyName(friendlyName string) (string, error) 
 	return "", fmt.Errorf("cannot find Kubernetes canonical name from friendly name [%s]", friendlyName)
 }
 
-// Return a the shortest name for a k8s canonical name.
+// ShortNameFromCanonicalResourceName returns the shortest name for a k8s canonical name.
 // Essentially the reverse of CanonicalResourceNameFromFriendlyName
 func ShortNameFromCanonicalResourceName(canonicalName string) string {
 	switch canonicalName {
-	case Deployment:
-		return "deploy"
+	case Authority:
+		return "au"
 	case DaemonSet:
 		return "ds"
+	case Deployment:
+		return "deploy"
+	case Job:
+		return "job"
 	case Namespace:
 		return "ns"
 	case Pod:
@@ -135,11 +148,38 @@ func ShortNameFromCanonicalResourceName(canonicalName string) string {
 		return "rs"
 	case Service:
 		return "svc"
+	case ServiceProfile:
+		return "sp"
 	case StatefulSet:
 		return "sts"
-	case Authority:
-		return "au"
 	default:
 		return ""
 	}
+}
+
+// KindToL5DLabel converts a Kubernetes `kind` to a Linkerd label.
+// For example:
+//   `pod` -> `pod`
+//   `job` -> `k8s_job`
+func KindToL5DLabel(k8sKind string) string {
+	if k8sKind == Job {
+		return l5dJob
+	}
+	return k8sKind
+}
+
+// BuildURL returns an abosolute URL from a reference URL. It parses a base
+// rawurl and reference rawurl. Then, it tries to resolve the reference from
+// the absolute base.
+func BuildURL(base string, ref string) (*url.URL, error) {
+	u, err := url.Parse(ref)
+	if err != nil {
+		return nil, fmt.Errorf("error generating reference URL for endpoint from [%s]", base)
+	}
+	b, err := url.Parse(base)
+	if err != nil {
+		return nil, fmt.Errorf("error generating base URL for endpoint from [%s]", base)
+	}
+	url := b.ResolveReference(u)
+	return url, nil
 }

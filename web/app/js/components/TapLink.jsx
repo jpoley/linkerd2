@@ -1,8 +1,10 @@
 import PropTypes from 'prop-types';
 import React from 'react';
-import _ from 'lodash';
 
-const TapLink = ({PrefixedLink, namespace, resource, toNamespace, toResource, path}) => {
+const TapLink = ({PrefixedLink, namespace, resource, toNamespace, toResource, path, disabled}) => {
+  if (disabled || namespace === "") {
+    return <i className="fas fa-microscope tapGrayed" />;
+  }
   let params = {
     autostart: "true",
     namespace,
@@ -11,7 +13,7 @@ const TapLink = ({PrefixedLink, namespace, resource, toNamespace, toResource, pa
     toResource,
     path
   };
-  let queryStr = _.join(_.map(params, (v,k) => `${k}=${v}`), "&");
+  let queryStr = Object.entries(params).map(([k, v]) => `${k}=${v}`).join("&");
 
   return (
     <PrefixedLink to={`/tap?${queryStr}`}>
@@ -21,12 +23,18 @@ const TapLink = ({PrefixedLink, namespace, resource, toNamespace, toResource, pa
 };
 
 TapLink.propTypes = {
-  namespace: PropTypes.string.isRequired,
+  disabled: PropTypes.bool,
+  namespace: PropTypes.string,
   path: PropTypes.string.isRequired,
   PrefixedLink: PropTypes.func.isRequired,
   resource: PropTypes.string.isRequired,
   toNamespace: PropTypes.string.isRequired,
   toResource: PropTypes.string.isRequired,
+};
+
+TapLink.defaultProps = {
+  disabled: false,
+  namespace: ""
 };
 
 export default TapLink;

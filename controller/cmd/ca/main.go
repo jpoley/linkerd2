@@ -18,7 +18,6 @@ func main() {
 	controllerNamespace := flag.String("controller-namespace", "linkerd", "namespace in which Linkerd is installed")
 	singleNamespace := flag.Bool("single-namespace", false, "only operate in the controller namespace")
 	kubeConfigPath := flag.String("kubeconfig", "", "path to kube config")
-	proxyAutoInject := flag.Bool("proxy-auto-inject", false, "if true, watch for the add and update events of mutating webhook configurations")
 	flags.ConfigureAndParse()
 
 	stop := make(chan os.Signal, 1)
@@ -34,29 +33,23 @@ func main() {
 		restrictToNamespace = *controllerNamespace
 	}
 
-	var k8sAPI *k8s.API
-	if *proxyAutoInject {
-		k8sAPI = k8s.NewAPI(k8sClient, nil, restrictToNamespace, k8s.Pod, k8s.RS, k8s.MWC)
-	} else {
-		k8sAPI = k8s.NewAPI(k8sClient, nil, restrictToNamespace, k8s.Pod, k8s.RS)
-	}
+	k8sAPI := k8s.NewAPI(k8sClient, nil, restrictToNamespace, k8s.Pod, k8s.RS)
 
-	controller, err := ca.NewCertificateController(*controllerNamespace, k8sAPI, *proxyAutoInject)
+	controller, err := ca.NewCertificateController(*controllerNamespace, k8sAPI)
 	if err != nil {
 		log.Fatalf("Failed to create CertificateController: %v", err)
 	}
 
 	stopCh := make(chan struct{})
-	ready := make(chan struct{})
 
-	go k8sAPI.Sync(ready)
+	k8sAPI.Sync() // blocks until caches are synced
 
 	go func() {
 		log.Info("starting CA")
-		controller.Run(ready, stopCh)
+		controller.Run(stopCh)
 	}()
 
-	go admin.StartServer(*metricsAddr, ready)
+	go admin.StartServer(*metricsAddr)
 
 	<-stop
 

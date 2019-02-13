@@ -9,19 +9,30 @@ import (
 
 	"github.com/golang/protobuf/proto"
 	healcheckPb "github.com/linkerd/linkerd2/controller/gen/common/healthcheck"
+	"github.com/linkerd/linkerd2/controller/gen/controller/discovery"
 	pb "github.com/linkerd/linkerd2/controller/gen/public"
 )
 
-type mockGrpcServer struct {
+type mockServer struct {
 	LastRequestReceived proto.Message
 	ResponseToReturn    proto.Message
 	TapStreamsToReturn  []*pb.TapEvent
 	ErrorToReturn       error
 }
 
+type mockGrpcServer struct {
+	mockServer
+	TapStreamsToReturn []*pb.TapEvent
+}
+
 func (m *mockGrpcServer) StatSummary(ctx context.Context, req *pb.StatSummaryRequest) (*pb.StatSummaryResponse, error) {
 	m.LastRequestReceived = req
 	return m.ResponseToReturn.(*pb.StatSummaryResponse), m.ErrorToReturn
+}
+
+func (m *mockGrpcServer) TopRoutes(ctx context.Context, req *pb.TopRoutesRequest) (*pb.TopRoutesResponse, error) {
+	m.LastRequestReceived = req
+	return m.ResponseToReturn.(*pb.TopRoutesResponse), m.ErrorToReturn
 }
 
 func (m *mockGrpcServer) Version(ctx context.Context, req *pb.Empty) (*pb.VersionInfo, error) {
@@ -32,6 +43,11 @@ func (m *mockGrpcServer) Version(ctx context.Context, req *pb.Empty) (*pb.Versio
 func (m *mockGrpcServer) ListPods(ctx context.Context, req *pb.ListPodsRequest) (*pb.ListPodsResponse, error) {
 	m.LastRequestReceived = req
 	return m.ResponseToReturn.(*pb.ListPodsResponse), m.ErrorToReturn
+}
+
+func (m *mockGrpcServer) ListServices(ctx context.Context, req *pb.ListServicesRequest) (*pb.ListServicesResponse, error) {
+	m.LastRequestReceived = req
+	return m.ResponseToReturn.(*pb.ListServicesResponse), m.ErrorToReturn
 }
 
 func (m *mockGrpcServer) SelfCheck(ctx context.Context, req *healcheckPb.SelfCheckRequest) (*healcheckPb.SelfCheckResponse, error) {
@@ -59,6 +75,11 @@ func (m *mockGrpcServer) TapByResource(req *pb.TapByResourceRequest, tapServer p
 	}
 
 	return m.ErrorToReturn
+}
+
+func (m *mockGrpcServer) Endpoints(ctx context.Context, req *discovery.EndpointsParams) (*discovery.EndpointsResponse, error) {
+	m.LastRequestReceived = req
+	return m.ResponseToReturn.(*discovery.EndpointsResponse), m.ErrorToReturn
 }
 
 type grpcCallTestCase struct {
@@ -118,8 +139,18 @@ func TestServer(t *testing.T) {
 			functionCall: func() (proto.Message, error) { return client.Version(context.TODO(), versionReq) },
 		}
 
+		endpointsReq := &discovery.EndpointsParams{}
+		testEndpoints := grpcCallTestCase{
+			expectedRequest:  endpointsReq,
+			expectedResponse: &discovery.EndpointsResponse{},
+			functionCall:     func() (proto.Message, error) { return client.Endpoints(context.TODO(), endpointsReq) },
+		}
+
 		for _, testCase := range []grpcCallTestCase{testListPods, testStatSummary, testVersion} {
-			assertCallWasForwarded(t, mockGrpcServer, testCase.expectedRequest, testCase.expectedResponse, testCase.functionCall)
+			assertCallWasForwarded(t, &mockGrpcServer.mockServer, testCase.expectedRequest, testCase.expectedResponse, testCase.functionCall)
+		}
+		for _, testCase := range []grpcCallTestCase{testEndpoints} {
+			assertCallWasForwarded(t, &mockGrpcServer.mockServer, testCase.expectedRequest, testCase.expectedResponse, testCase.functionCall)
 		}
 	})
 
@@ -215,14 +246,14 @@ func TestServer(t *testing.T) {
 	})
 }
 
-func assertCallWasForwarded(t *testing.T, mockGrpcServer *mockGrpcServer, expectedRequest proto.Message, expectedResponse proto.Message, functionCall func() (proto.Message, error)) {
-	mockGrpcServer.ErrorToReturn = nil
-	mockGrpcServer.ResponseToReturn = expectedResponse
+func assertCallWasForwarded(t *testing.T, mockServer *mockServer, expectedRequest proto.Message, expectedResponse proto.Message, functionCall func() (proto.Message, error)) {
+	mockServer.ErrorToReturn = nil
+	mockServer.ResponseToReturn = expectedResponse
 	actualResponse, err := functionCall()
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-	actualRequest := mockGrpcServer.LastRequestReceived
+	actualRequest := mockServer.LastRequestReceived
 	if !proto.Equal(actualRequest, expectedRequest) {
 		t.Fatalf("Expecting server call to return [%v], but got [%v]", expectedRequest, actualRequest)
 	}
@@ -230,7 +261,7 @@ func assertCallWasForwarded(t *testing.T, mockGrpcServer *mockGrpcServer, expect
 		t.Fatalf("Expecting server call to return [%v], but got [%v]", expectedResponse, actualResponse)
 	}
 
-	mockGrpcServer.ErrorToReturn = errors.New("expected")
+	mockServer.ErrorToReturn = errors.New("expected")
 	_, err = functionCall()
 	if err == nil {
 		t.Fatalf("Expecting error, got nothing")

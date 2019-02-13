@@ -40,16 +40,14 @@ func (l *profileListener) Stop() {
 }
 
 func (l *profileListener) Update(profile *sp.ServiceProfile) {
-	routes := make([]*pb.Route, 0)
-	if profile != nil {
-		for _, route := range profile.Spec.Routes {
-			pbRoute, err := profiles.ToRoute(route)
-			if err != nil {
-				log.Error(err)
-				return
-			}
-			routes = append(routes, pbRoute)
-		}
+	if profile == nil {
+		l.stream.Send(&profiles.DefaultServiceProfile)
+		return
 	}
-	l.stream.Send(&pb.DestinationProfile{Routes: routes})
+	destinationProfile, err := profiles.ToServiceProfile(&profile.Spec)
+	if err != nil {
+		log.Error(err)
+		return
+	}
+	l.stream.Send(destinationProfile)
 }

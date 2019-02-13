@@ -1,5 +1,4 @@
-import { friendlyTitle, metricToFormatter, numericSort } from './util/Utils.js';
-
+import { displayName, friendlyTitle, metricToFormatter, numericSort } from './util/Utils.js';
 import BaseTable from './BaseTable.jsx';
 import ErrorModal from './ErrorModal.jsx';
 import GrafanaLink from './GrafanaLink.jsx';
@@ -7,12 +6,18 @@ import Grid from '@material-ui/core/Grid';
 import PropTypes from 'prop-types';
 import React from 'react';
 import SuccessRateMiniChart from './util/SuccessRateMiniChart.jsx';
-import _ from 'lodash';
+import _cloneDeep from 'lodash/cloneDeep';
+import _each from 'lodash/each';
+import _get from 'lodash/get';
+import _isEmpty from 'lodash/isEmpty';
+import _isNil from 'lodash/isNil';
 import { processedMetricsPropType } from './util/MetricUtils.jsx';
 import { withContext } from './util/AppContext.jsx';
 
 const columnDefinitions = (resource, showNamespaceColumn, PrefixedLink) => {
   let isAuthorityTable = resource === "authority";
+  let isMultiResourceTable = resource === "multi_resource";
+  let getResourceDisplayName =  isMultiResourceTable ? displayName : d => d.name;
 
   let nsColumn = [
     {
@@ -34,7 +39,7 @@ const columnDefinitions = (resource, showNamespaceColumn, PrefixedLink) => {
 
   let columns = [
     {
-      title: friendlyTitle(resource).singular,
+      title: isMultiResourceTable ? "Resource" : friendlyTitle(resource).singular,
       dataIndex: "name",
       isNumeric: false,
       render: d => {
@@ -42,23 +47,23 @@ const columnDefinitions = (resource, showNamespaceColumn, PrefixedLink) => {
         if (resource === "namespace") {
           nameContents = <PrefixedLink to={"/namespaces/" + d.name}>{d.name}</PrefixedLink>;
         } else if (!d.added || isAuthorityTable) {
-          nameContents = d.name;
+          nameContents = getResourceDisplayName(d);
         } else {
           nameContents = (
-            <PrefixedLink to={"/namespaces/" + d.namespace + "/" + resource + "s/" + d.name}>
-              {d.name}
+            <PrefixedLink to={"/namespaces/" + d.namespace + "/" + d.type + "s/" + d.name}>
+              {getResourceDisplayName(d)}
             </PrefixedLink>
           );
         }
         return (
           <Grid container alignItems="center" spacing={8}>
             <Grid item>{nameContents}</Grid>
-            { _.isEmpty(d.errors) ? null :
-            <Grid item><ErrorModal errors={d.errors} resourceName={d.name} resourceType={resource} /></Grid>}
+            { _isEmpty(d.errors) ? null :
+            <Grid item><ErrorModal errors={d.errors} resourceName={d.name} resourceType={d.type} /></Grid>}
           </Grid>
         );
       },
-      sorter: (a, b) => (a.name || "").localeCompare(b.name)
+      sorter: (a, b) => (getResourceDisplayName(a) || "").localeCompare(getResourceDisplayName(b))
     },
     {
       title: "Success Rate",
@@ -68,7 +73,7 @@ const columnDefinitions = (resource, showNamespaceColumn, PrefixedLink) => {
       sorter: (a, b) => numericSort(a.successRate, b.successRate)
     },
     {
-      title: "Request Rate",
+      title: "RPS",
       dataIndex: "requestRate",
       isNumeric: true,
       render: d => metricToFormatter["NO_UNIT"](d.requestRate),
@@ -99,7 +104,7 @@ const columnDefinitions = (resource, showNamespaceColumn, PrefixedLink) => {
       title: "TLS",
       dataIndex: "tlsRequestPercent",
       isNumeric: true,
-      render: d => _.isNil(d.tlsRequestPercent) || d.tlsRequestPercent.get() === -1 ? "---" : d.tlsRequestPercent.prettyRate(),
+      render: d => _isNil(d.tlsRequestPercent) || d.tlsRequestPercent.get() === -1 ? "---" : d.tlsRequestPercent.prettyRate(),
       sorter: (a, b) => numericSort(
         a.tlsRequestPercent ? a.tlsRequestPercent.get() : -1,
         b.tlsRequestPercent ? b.tlsRequestPercent.get() : -1)
@@ -109,7 +114,7 @@ const columnDefinitions = (resource, showNamespaceColumn, PrefixedLink) => {
       key: "grafanaDashboard",
       isNumeric: true,
       render: row => {
-        if (!isAuthorityTable && (!row.added || _.get(row, "pods.totalPods") === "0") ) {
+        if (!isAuthorityTable && (!row.added || _get(row, "pods.totalPods") === "0") ) {
           return null;
         }
 
@@ -117,7 +122,7 @@ const columnDefinitions = (resource, showNamespaceColumn, PrefixedLink) => {
           <GrafanaLink
             name={row.name}
             namespace={row.namespace}
-            resource={resource}
+            resource={row.type}
             PrefixedLink={PrefixedLink} />
         );
       }
@@ -132,16 +137,16 @@ const columnDefinitions = (resource, showNamespaceColumn, PrefixedLink) => {
   if (!showNamespaceColumn) {
     return columns;
   } else {
-    return _.concat(nsColumn, columns);
+    return nsColumn.concat(columns);
   }
 };
 
 
 const preprocessMetrics = metrics => {
-  let tableData = _.cloneDeep(metrics);
+  let tableData = _cloneDeep(metrics);
 
-  _.each(tableData, datum => {
-    _.each(datum.latency, (value, quantile) => {
+  _each(tableData, datum => {
+    _each(datum.latency, (value, quantile) => {
       datum[quantile] = value;
     });
   });

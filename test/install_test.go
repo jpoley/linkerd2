@@ -24,18 +24,18 @@ func TestMain(m *testing.M) {
 
 var (
 	linkerdSvcs = []string{
-		"api",
-		"grafana",
-		"prometheus",
-		"proxy-api",
-		"web",
+		"linkerd-controller-api",
+		"linkerd-grafana",
+		"linkerd-prometheus",
+		"linkerd-proxy-api",
+		"linkerd-web",
 	}
 
 	linkerdDeployReplicas = map[string]int{
-		"controller": 1,
-		"grafana":    1,
-		"prometheus": 1,
-		"web":        1,
+		"linkerd-controller": 1,
+		"linkerd-grafana":    1,
+		"linkerd-prometheus": 1,
+		"linkerd-web":        1,
 	}
 )
 
@@ -66,10 +66,14 @@ func TestCheckPreInstall(t *testing.T) {
 }
 
 func TestInstall(t *testing.T) {
-	cmd := []string{"install", "--linkerd-version", TestHelper.GetVersion()}
+	cmd := []string{"install",
+		"--controller-log-level", "debug",
+		"--proxy-log-level", "warn,linkerd2_proxy=debug",
+		"--linkerd-version", TestHelper.GetVersion(),
+	}
 	if TestHelper.TLS() {
 		cmd = append(cmd, []string{"--tls", "optional"}...)
-		linkerdDeployReplicas["ca"] = 1
+		linkerdDeployReplicas["linkerd-ca"] = 1
 	}
 
 	out, _, err := TestHelper.LinkerdRun(cmd...)
@@ -133,10 +137,7 @@ func TestCheckPostInstall(t *testing.T) {
 
 func TestDashboard(t *testing.T) {
 	dashboardPort := 52237
-	dashboardURL := fmt.Sprintf(
-		"http://127.0.0.1:%d/api/v1/namespaces/%s/services/web:http/proxy",
-		dashboardPort, TestHelper.GetLinkerdNamespace(),
-	)
+	dashboardURL := fmt.Sprintf("http://127.0.0.1:%d", dashboardPort)
 
 	outputStream, err := TestHelper.LinkerdRunStream("dashboard", "-p",
 		strconv.Itoa(dashboardPort), "--show", "url")
@@ -188,19 +189,19 @@ func TestInject(t *testing.T) {
 		t.Fatalf("kubectl apply command failed\n%s", out)
 	}
 
-	for _, deploy := range []string{"smoke-test-terminus","smoke-test-gateway"} {
+	for _, deploy := range []string{"smoke-test-terminus", "smoke-test-gateway"} {
 		err = TestHelper.CheckPods(prefixedNs, deploy, 1)
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
 	}
 
-	svcURL, err := TestHelper.ProxyURLFor(prefixedNs, "smoke-test-gateway-svc", "http")
+	url, err := TestHelper.URLFor(prefixedNs, "smoke-test-gateway", 8080)
 	if err != nil {
-		t.Fatalf("Failed to get proxy URL: %s", err)
+		t.Fatalf("Failed to get URL: %s", err)
 	}
 
-	output, err := TestHelper.HTTPGetURL(svcURL)
+	output, err := TestHelper.HTTPGetURL(url)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v %s", err, output)
 	}

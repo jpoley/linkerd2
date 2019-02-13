@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/linkerd/linkerd2/controller/gen/controller/discovery"
 	pb "github.com/linkerd/linkerd2/controller/gen/public"
 )
 
@@ -32,7 +33,7 @@ func TestNewInternalClient(t *testing.T) {
 			StatusCode: 200,
 			Body:       ioutil.NopCloser(bufferedReader(t, &pb.Empty{})),
 		}
-		mockHttpClient := &http.Client{
+		mockHTTPClient := &http.Client{
 			Transport: mockTransport,
 		}
 
@@ -41,7 +42,7 @@ func TestNewInternalClient(t *testing.T) {
 			Host:   "some-hostname",
 			Path:   "/",
 		}
-		client, err := newClient(apiURL, mockHttpClient, "linkerd")
+		client, err := newClient(apiURL, mockHTTPClient, "linkerd")
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
@@ -51,10 +52,10 @@ func TestNewInternalClient(t *testing.T) {
 			t.Fatalf("Unexpected error: %v", err)
 		}
 
-		expectedUrlRequested := "http://some-hostname/api/v1/Version"
-		actualUrlRequested := mockTransport.requestSent.URL.String()
-		if actualUrlRequested != expectedUrlRequested {
-			t.Fatalf("Expected request to URL [%v], but got [%v]", expectedUrlRequested, actualUrlRequested)
+		expectedURLRequested := "http://some-hostname/api/v1/Version"
+		actualURLRequested := mockTransport.requestSent.URL.String()
+		if actualURLRequested != expectedURLRequested {
+			t.Fatalf("Expected request to URL [%v], but got [%v]", expectedURLRequested, actualURLRequested)
 		}
 	})
 }
@@ -151,6 +152,36 @@ func TestFromByteStreamToProtocolBuffers(t *testing.T) {
 			t.Fatal("Expecting error, got nothing")
 		}
 	})
+}
+
+func TestEndpointsRequest(t *testing.T) {
+	mockTransport := &mockTransport{}
+	mockTransport.responseToReturn = &http.Response{
+		StatusCode: 200,
+		Body:       ioutil.NopCloser(bufferedReader(t, &pb.Empty{})),
+	}
+	mockHTTPClient := &http.Client{
+		Transport: mockTransport,
+	}
+	apiURL := &url.URL{
+		Scheme: "http",
+		Host:   "some-hostname",
+		Path:   "/",
+	}
+	client, err := newClient(apiURL, mockHTTPClient, "linkerd")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	resp, err := client.Endpoints(context.Background(), &discovery.EndpointsParams{})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	expectedResp := &discovery.EndpointsResponse{}
+	if !proto.Equal(resp, expectedResp) {
+		t.Fatalf("Expected response [%v], got: [%v]", expectedResp, resp)
+	}
 }
 
 func bufferedReader(t *testing.T, msg proto.Message) *bufio.Reader {

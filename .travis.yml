@@ -37,6 +37,7 @@ jobs:
         - ./bin/protoc-go.sh
         - go test -race -v ./...
         - go vet ./...
+        - ./bin/lint
 
     - language: node_js
       node_js:
@@ -158,7 +159,9 @@ jobs:
           # Run integration tests.
           version="$(./linkerd version --client --short | tr -cd '[:alnum:]-')"
           ./bin/test-run `pwd`/linkerd linkerd-$version
-
+        - |
+          # Run linkerd-cni integration tests.
+          TAG="$(./linkerd version --client --short)" go test -v -race ./cni-plugin/test -integration-tests
       after_script:
         - |
           # Cleanup after integration test run.

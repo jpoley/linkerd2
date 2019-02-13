@@ -2,11 +2,13 @@ package main
 
 import (
 	"flag"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/linkerd/linkerd2/controller/api/proxy"
+	spclient "github.com/linkerd/linkerd2/controller/gen/client/clientset/versioned"
 	"github.com/linkerd/linkerd2/controller/k8s"
 	"github.com/linkerd/linkerd2/pkg/admin"
 	"github.com/linkerd/linkerd2/pkg/flags"
@@ -18,6 +20,7 @@ func main() {
 	metricsAddr := flag.String("metrics-addr", ":9996", "address to serve scrapable metrics on")
 	kubeConfigPath := flag.String("kubeconfig", "", "path to kube config")
 	k8sDNSZone := flag.String("kubernetes-dns-zone", "", "The DNS suffix for the local Kubernetes zone.")
+	enableH2Upgrade := flag.Bool("enable-h2-upgrade", true, "Enable transparently upgraded HTTP2 connections among pods in the service mesh")
 	enableTLS := flag.Bool("enable-tls", false, "Enable TLS connections among pods in the service mesh")
 	controllerNamespace := flag.String("controller-namespace", "linkerd", "namespace in which Linkerd is installed")
 	singleNamespace := flag.Bool("single-namespace", false, "only operate in the controller namespace")
@@ -30,42 +33,49 @@ func main() {
 	if err != nil {
 		log.Fatal(err.Error())
 	}
-	spClient, err := k8s.NewSpClientSet(*kubeConfigPath)
-	if err != nil {
-		log.Fatal(err.Error())
-	}
 
+	var spClient *spclient.Clientset
 	restrictToNamespace := ""
+	resources := []k8s.APIResource{k8s.Endpoint, k8s.Pod, k8s.RS, k8s.Svc}
+
 	if *singleNamespace {
 		restrictToNamespace = *controllerNamespace
+	} else {
+		spClient, err = k8s.NewSpClientSet(*kubeConfigPath)
+		if err != nil {
+			log.Fatal(err.Error())
+		}
+
+		resources = append(resources, k8s.SP)
 	}
+
 	k8sAPI := k8s.NewAPI(
 		k8sClient,
 		spClient,
 		restrictToNamespace,
-		k8s.Endpoint,
-		k8s.Pod,
-		k8s.RS,
-		k8s.Svc,
-		k8s.SP,
+		resources...,
 	)
 
 	done := make(chan struct{})
-	ready := make(chan struct{})
 
-	server, lis, err := proxy.NewServer(*addr, *k8sDNSZone, *controllerNamespace, *enableTLS, k8sAPI, done)
+	lis, err := net.Listen("tcp", *addr)
+	if err != nil {
+		log.Fatalf("Failed to listen on %s: %s", *addr, err)
+	}
+
+	server, err := proxy.NewServer(*addr, *k8sDNSZone, *controllerNamespace, *enableTLS, *enableH2Upgrade, *singleNamespace, k8sAPI, done)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	go k8sAPI.Sync(ready)
+	k8sAPI.Sync() // blocks until caches are synced
 
 	go func() {
 		log.Infof("starting gRPC server on %s", *addr)
 		server.Serve(lis)
 	}()
 
-	go admin.StartServer(*metricsAddr, ready)
+	go admin.StartServer(*metricsAddr)
 
 	<-stop
 

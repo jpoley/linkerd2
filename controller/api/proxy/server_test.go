@@ -5,73 +5,58 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/golang/protobuf/proto"
 	pb "github.com/linkerd/linkerd2-proxy-api/go/destination"
+	"github.com/linkerd/linkerd2/controller/gen/controller/discovery"
 	"github.com/linkerd/linkerd2/controller/k8s"
 	"google.golang.org/grpc/metadata"
 )
 
-type mockDestination_Server struct {
+type mockDestinationServer struct {
 	errorToReturn   error
 	contextToReturn context.Context
 }
 
-type mockDestination_GetServer struct {
-	mockDestination_Server
+type mockDestinationGetServer struct {
+	mockDestinationServer
 	updatesReceived []*pb.Update
 }
 
-type mockDestination_GetProfileServer struct {
-	mockDestination_Server
+type mockDestinationGetProfileServer struct {
+	mockDestinationServer
 	profilesReceived []*pb.DestinationProfile
 }
 
-func (m *mockDestination_GetServer) Send(update *pb.Update) error {
+func (m *mockDestinationGetServer) Send(update *pb.Update) error {
 	m.updatesReceived = append(m.updatesReceived, update)
 	return m.errorToReturn
 }
 
-func (m *mockDestination_GetProfileServer) Send(profile *pb.DestinationProfile) error {
+func (m *mockDestinationGetProfileServer) Send(profile *pb.DestinationProfile) error {
 	m.profilesReceived = append(m.profilesReceived, profile)
 	return m.errorToReturn
 }
 
-func (m *mockDestination_Server) SetHeader(metadata.MD) error  { return m.errorToReturn }
-func (m *mockDestination_Server) SendHeader(metadata.MD) error { return m.errorToReturn }
-func (m *mockDestination_Server) SetTrailer(metadata.MD)       {}
-func (m *mockDestination_Server) Context() context.Context     { return m.contextToReturn }
-func (m *mockDestination_Server) SendMsg(x interface{}) error  { return m.errorToReturn }
-func (m *mockDestination_Server) RecvMsg(x interface{}) error  { return m.errorToReturn }
+func (m *mockDestinationServer) SetHeader(metadata.MD) error  { return m.errorToReturn }
+func (m *mockDestinationServer) SendHeader(metadata.MD) error { return m.errorToReturn }
+func (m *mockDestinationServer) SetTrailer(metadata.MD)       {}
+func (m *mockDestinationServer) Context() context.Context     { return m.contextToReturn }
+func (m *mockDestinationServer) SendMsg(x interface{}) error  { return m.errorToReturn }
+func (m *mockDestinationServer) RecvMsg(x interface{}) error  { return m.errorToReturn }
 
-func TestBuildResolversList(t *testing.T) {
+func TestBuildResolver(t *testing.T) {
 	k8sAPI, err := k8s.NewFakeAPI("")
 	if err != nil {
 		t.Fatalf("NewFakeAPI returned an error: %s", err)
 	}
 
-	t.Run("Doesn't build a list if Kubernetes DNS zone isnt valid", func(t *testing.T) {
+	t.Run("Doesn't build a resolver if Kubernetes DNS zone isnt valid", func(t *testing.T) {
 		invalidK8sDNSZones := []string{"1", "-a", "a-", "-"}
 		for _, dsnZone := range invalidK8sDNSZones {
-			resolvers, err := buildResolversList(dsnZone, "linkerd", k8sAPI)
+			resolver, err := buildResolver(dsnZone, "linkerd", k8sAPI, false)
 			if err == nil {
-				t.Fatalf("Expecting error when k8s zone is [%s], got nothing. Resolvers: %v", dsnZone, resolvers)
+				t.Fatalf("Expecting error when k8s zone is [%s], got nothing. Resolver: %v", dsnZone, resolver)
 			}
-		}
-	})
-
-	t.Run("Builds list with echo IP first, then K8s resolver", func(t *testing.T) {
-		resolvers, err := buildResolversList("some.zone", "linkerd", k8sAPI)
-		if err != nil {
-			t.Fatalf("Unexpected error: %v", err)
-		}
-
-		actualNumResolvers := len(resolvers)
-		expectedNumResolvers := 1
-		if actualNumResolvers != expectedNumResolvers {
-			t.Fatalf("Expecting [%d] resolvers, got [%d]: %v", expectedNumResolvers, actualNumResolvers, resolvers)
-		}
-
-		if _, ok := resolvers[0].(*k8sResolver); !ok {
-			t.Fatalf("Expecting second resolver to be k8s, got [%+v]. List: %v", resolvers[0], resolvers)
 		}
 	})
 }
@@ -97,14 +82,18 @@ func (m *mockStreamingDestinationResolver) streamResolution(host string, port in
 	return m.errToReturnForResolution
 }
 
-func (m *mockStreamingDestinationResolver) streamProfiles(host string, listener profileUpdateListener) error {
+func (m *mockStreamingDestinationResolver) streamProfiles(host string, clientNs string, listener profileUpdateListener) error {
 	return nil
+}
+
+func (m *mockStreamingDestinationResolver) getState() servicePorts {
+	return servicePorts{}
 }
 
 func (m *mockStreamingDestinationResolver) stop() {}
 
 func TestStreamResolutionUsingCorrectResolverFor(t *testing.T) {
-	stream := &mockDestination_GetServer{}
+	stream := &mockDestinationGetServer{}
 	host := "something"
 	port := 666
 	k8sAPI, err := k8s.NewFakeAPI("")
@@ -112,43 +101,15 @@ func TestStreamResolutionUsingCorrectResolverFor(t *testing.T) {
 		t.Fatalf("NewFakeAPI returned an error: %s", err)
 	}
 
-	t.Run("Uses first resolver that is able to resolve the host and port", func(t *testing.T) {
-		no := &mockStreamingDestinationResolver{canResolveToReturn: false}
-		yes := &mockStreamingDestinationResolver{canResolveToReturn: true}
-		otherYes := &mockStreamingDestinationResolver{canResolveToReturn: true}
-
-		server := server{
-			k8sAPI:    k8sAPI,
-			resolvers: []streamingDestinationResolver{no, no, yes, no, no, otherYes},
-		}
-
-		err := server.streamResolutionUsingCorrectResolverFor(host, port, stream)
-		if err != nil {
-			t.Fatalf("Unexpected error: %v", err)
-		}
-
-		if no.listenerReceived != nil {
-			t.Fatalf("Expected handler [%+v] to not be called, but it was", no)
-		}
-
-		if otherYes.listenerReceived != nil {
-			t.Fatalf("Expected handler [%+v] to not be called, but it was", otherYes)
-		}
-
-		if yes.listenerReceived == nil || yes.portReceived != port || yes.hostReceived != host {
-			t.Fatalf("Expected resolved [%+v] to have been called with stream [%v] host [%s] and port [%d]", yes, stream, host, port)
-		}
-	})
-
 	t.Run("Returns error if no resolver can resolve", func(t *testing.T) {
 		no := &mockStreamingDestinationResolver{canResolveToReturn: false}
 
 		server := server{
-			k8sAPI:    k8sAPI,
-			resolvers: []streamingDestinationResolver{no, no, no, no},
+			k8sAPI:   k8sAPI,
+			resolver: no,
 		}
 
-		err := server.streamResolutionUsingCorrectResolverFor(host, port, stream)
+		err := server.streamResolution(host, port, stream)
 		if err == nil {
 			t.Fatalf("Expecting error, got nothing")
 		}
@@ -158,11 +119,11 @@ func TestStreamResolutionUsingCorrectResolverFor(t *testing.T) {
 		resolver := &mockStreamingDestinationResolver{canResolveToReturn: true, errToReturnForCanResolve: errors.New("expected for can resolve")}
 
 		server := server{
-			k8sAPI:    k8sAPI,
-			resolvers: []streamingDestinationResolver{resolver},
+			k8sAPI:   k8sAPI,
+			resolver: resolver,
 		}
 
-		err := server.streamResolutionUsingCorrectResolverFor(host, port, stream)
+		err := server.streamResolution(host, port, stream)
 		if err == nil {
 			t.Fatalf("Expecting error, got nothing")
 		}
@@ -172,13 +133,40 @@ func TestStreamResolutionUsingCorrectResolverFor(t *testing.T) {
 		resolver := &mockStreamingDestinationResolver{canResolveToReturn: true, errToReturnForResolution: errors.New("expected for resolving")}
 
 		server := server{
-			k8sAPI:    k8sAPI,
-			resolvers: []streamingDestinationResolver{resolver},
+			k8sAPI:   k8sAPI,
+			resolver: resolver,
 		}
 
-		err := server.streamResolutionUsingCorrectResolverFor(host, port, stream)
+		err := server.streamResolution(host, port, stream)
 		if err == nil {
 			t.Fatalf("Expecting error, got nothing")
+		}
+	})
+}
+
+func TestEndpoints(t *testing.T) {
+	k8sAPI, err := k8s.NewFakeAPI("")
+	if err != nil {
+		t.Fatalf("NewFakeAPI returned an error: %s", err)
+	}
+	k8sAPI.Sync()
+
+	discoveryClient, gRPCServer, proxyAPIConn := InitFakeDiscoveryServer(t, k8sAPI)
+	defer gRPCServer.GracefulStop()
+	defer proxyAPIConn.Close()
+
+	t.Run("Implements the Discovery interface", func(t *testing.T) {
+		resp, err := discoveryClient.Endpoints(context.Background(), &discovery.EndpointsParams{})
+		if err != nil {
+			t.Fatalf("Unexpected error: %s", err)
+		}
+
+		expectedResp := &discovery.EndpointsResponse{
+			ServicePorts: make(map[string]*discovery.ServicePort),
+		}
+
+		if !proto.Equal(resp, expectedResp) {
+			t.Fatalf("Unexpected response: %+v", resp)
 		}
 	})
 }

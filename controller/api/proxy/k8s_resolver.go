@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/linkerd/linkerd2/controller/k8s"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -22,26 +21,31 @@ type k8sResolver struct {
 	profileWatcher      *profileWatcher
 }
 
-func newK8sResolver(k8sDNSZoneLabels []string, controllerNamespace string, k8sAPI *k8s.API) *k8sResolver {
+func newK8sResolver(
+	k8sDNSZoneLabels []string,
+	controllerNamespace string,
+	ew *endpointsWatcher,
+	pw *profileWatcher,
+) *k8sResolver {
 	return &k8sResolver{
 		k8sDNSZoneLabels:    k8sDNSZoneLabels,
 		controllerNamespace: controllerNamespace,
-		endpointsWatcher:    newEndpointsWatcher(k8sAPI),
-		profileWatcher:      newProfileWatcher(k8sAPI),
+		endpointsWatcher:    ew,
+		profileWatcher:      pw,
 	}
 }
 
-type serviceId struct {
+type serviceID struct {
 	namespace string
 	name      string
 }
 
-func (s serviceId) String() string {
+func (s serviceID) String() string {
 	return fmt.Sprintf("%s.%s", s.name, s.namespace)
 }
 
 func (k *k8sResolver) canResolve(host string, port int) (bool, error) {
-	id, err := k.localKubernetesServiceIdFromDNSName(host)
+	id, err := k.localKubernetesServiceIDFromDNSName(host)
 	if err != nil {
 		return false, err
 	}
@@ -50,7 +54,7 @@ func (k *k8sResolver) canResolve(host string, port int) (bool, error) {
 }
 
 func (k *k8sResolver) streamResolution(host string, port int, listener endpointUpdateListener) error {
-	id, err := k.localKubernetesServiceIdFromDNSName(host)
+	id, err := k.localKubernetesServiceIDFromDNSName(host)
 	if err != nil {
 		log.Error(err)
 		return err
@@ -62,37 +66,80 @@ func (k *k8sResolver) streamResolution(host string, port int, listener endpointU
 		return err
 	}
 
-	listener.SetServiceId(id)
+	listener.SetServiceID(id)
 
 	return k.resolveKubernetesService(id, port, listener)
 }
 
-func (k *k8sResolver) streamProfiles(host string, listener profileUpdateListener) error {
-	id := profileId{
-		namespace: k.controllerNamespace,
-		name:      host,
+func (k *k8sResolver) streamProfiles(host string, clientNs string, listener profileUpdateListener) error {
+	// In single namespace mode, we'll close the stream immediately and the proxy
+	// will reissue the request after 3 seconds. If we wanted to be more
+	// sophisticated about this in the future, we could leave the stream open
+	// indefinitely, or we could update the API to support a ProfilesDisabled
+	// message. For now, however, this works.
+	if k.profileWatcher == nil {
+		return nil
 	}
 
-	err := k.profileWatcher.subscribeToProfile(id, listener)
-	if err != nil {
-		log.Error(err)
-		return err
+	subscriptions := map[profileID]profileUpdateListener{}
+
+	primaryListener, secondaryListener := newFallbackProfileListener(listener)
+
+	if clientNs != "" {
+		clientProfileID := profileID{
+			namespace: clientNs,
+			name:      host,
+		}
+
+		err := k.profileWatcher.subscribeToProfile(clientProfileID, primaryListener)
+		if err != nil {
+			log.Error(err)
+			return err
+		}
+		subscriptions[clientProfileID] = primaryListener
+	}
+
+	serviceID, err := k.localKubernetesServiceIDFromDNSName(host)
+	if err == nil && serviceID != nil {
+		serverProfileID := profileID{
+			namespace: serviceID.namespace,
+			name:      host,
+		}
+
+		err := k.profileWatcher.subscribeToProfile(serverProfileID, secondaryListener)
+		if err != nil {
+			log.Error(err)
+			return err
+		}
+		subscriptions[serverProfileID] = secondaryListener
 	}
 
 	select {
 	case <-listener.ClientClose():
-		return k.profileWatcher.unsubscribeToProfile(id, listener)
+		for id, listener := range subscriptions {
+			err = k.profileWatcher.unsubscribeToProfile(id, listener)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	case <-listener.ServerClose():
 		return nil
 	}
 }
 
-func (k *k8sResolver) stop() {
-	k.endpointsWatcher.stop()
-	k.profileWatcher.stop()
+func (k *k8sResolver) getState() servicePorts {
+	return k.endpointsWatcher.getState()
 }
 
-func (k *k8sResolver) resolveKubernetesService(id *serviceId, port int, listener endpointUpdateListener) error {
+func (k *k8sResolver) stop() {
+	k.endpointsWatcher.stop()
+	if k.profileWatcher != nil {
+		k.profileWatcher.stop()
+	}
+}
+
+func (k *k8sResolver) resolveKubernetesService(id *serviceID, port int, listener endpointUpdateListener) error {
 	k.endpointsWatcher.subscribe(id, uint32(port), listener)
 
 	select {
@@ -103,11 +150,11 @@ func (k *k8sResolver) resolveKubernetesService(id *serviceId, port int, listener
 	}
 }
 
-// localKubernetesServiceIdFromDNSName returns the name of the service in
+// localKubernetesServiceIDFromDNSName returns the name of the service in
 // "namespace-name/service-name" form if `host` is a DNS name in a form used
 // for local Kubernetes services. It returns nil if `host` isn't in such a
 // form.
-func (k *k8sResolver) localKubernetesServiceIdFromDNSName(host string) (*serviceId, error) {
+func (k *k8sResolver) localKubernetesServiceIDFromDNSName(host string) (*serviceID, error) {
 	hostLabels, err := splitDNSName(host)
 	if err != nil {
 		return nil, err
@@ -149,7 +196,7 @@ func (k *k8sResolver) localKubernetesServiceIdFromDNSName(host string) (*service
 		return nil, fmt.Errorf("not a service: %s", host)
 	}
 
-	return &serviceId{
+	return &serviceID{
 		namespace: hostLabels[1],
 		name:      hostLabels[0],
 	}, nil

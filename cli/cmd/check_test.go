@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io/ioutil"
 	"testing"
@@ -12,13 +13,13 @@ import (
 func TestCheckStatus(t *testing.T) {
 	t.Run("Prints expected output", func(t *testing.T) {
 		hc := healthcheck.NewHealthChecker(
-			[]healthcheck.Checks{},
-			&healthcheck.HealthCheckOptions{},
+			[]healthcheck.CategoryID{},
+			&healthcheck.Options{},
 		)
-		hc.Add("category", "check1", func() error {
+		hc.Add("category", "check1", "", func(context.Context) error {
 			return nil
 		})
-		hc.Add("category", "check2", func() error {
+		hc.Add("category", "check2", "hint-anchor", func(context.Context) error {
 			return fmt.Errorf("This should contain instructions for fail")
 		})
 

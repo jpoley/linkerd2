@@ -1,35 +1,32 @@
-import {
-  AppBar,
-  Collapse,
-  Divider,
-  Drawer,
-  IconButton,
-  ListItem,
-  ListItemIcon,
-  ListItemText,
-  MenuItem,
-  MenuList,
-  Toolbar,
-  Typography
-} from '@material-ui/core';
 import { githubIcon, linkerdWordLogo, slackIcon } from './util/SvgWrappers.jsx';
-
+import AppBar from '@material-ui/core/AppBar';
 import BreadcrumbHeader from './BreadcrumbHeader.jsx';
 import ChevronLeftIcon from '@material-ui/icons/ChevronLeft';
 import CloudQueueIcon from '@material-ui/icons/CloudQueue';
+import Collapse from '@material-ui/core/Collapse';
+import Divider from '@material-ui/core/Divider';
+import Drawer from '@material-ui/core/Drawer';
 import EmailIcon from '@material-ui/icons/Email';
 import ExpandLess from '@material-ui/icons/ExpandLess';
 import ExpandMore from '@material-ui/icons/ExpandMore';
 import HelpIcon from '@material-ui/icons/HelpOutline';
 import HomeIcon from '@material-ui/icons/Home';
 import Icon from '@material-ui/core/Icon';
+import IconButton from '@material-ui/core/IconButton';
 import LibraryBooksIcon from '@material-ui/icons/LibraryBooks';
 import { Link } from 'react-router-dom';
+import ListItem from '@material-ui/core/ListItem';
+import ListItemIcon from '@material-ui/core/ListItemIcon';
+import ListItemText from '@material-ui/core/ListItemText';
 import MenuIcon from '@material-ui/icons/Menu';
+import MenuItem from '@material-ui/core/MenuItem';
+import MenuList from '@material-ui/core/MenuList';
 import NavigationResources from './NavigationResources.jsx';
 import PropTypes from 'prop-types';
 import React from 'react';
 import ReactRouterPropTypes from 'react-router-prop-types';
+import Toolbar from '@material-ui/core/Toolbar';
+import Typography from '@material-ui/core/Typography';
 import Version from './Version.jsx';
 import classNames from 'classnames';
 import { withContext } from './util/AppContext.jsx';
@@ -199,7 +196,7 @@ class NavigationBase extends React.Component {
     );
   }
   render() {
-    const { classes, ChildComponent } = this.props;
+    const { classes, ChildComponent, ...otherProps } = this.props;
 
     return (
       <div className={classes.root}>
@@ -221,7 +218,7 @@ class NavigationBase extends React.Component {
           open={this.state.drawerOpen}>
           <div className={classNames(classes.navToolbar)}>
             <div className={classNames(classes.linkerdNavLogo, {[classes.linkerdNavLogoClose]: !this.state.drawerOpen} )}>
-              {linkerdWordLogo}
+              <Link to="/overview">{linkerdWordLogo}</Link>
             </div>
             <IconButton className="drawer-toggle-btn" onClick={this.handleDrawerClick}>
               {this.state.drawerOpen ? <ChevronLeftIcon /> : <MenuIcon />}
@@ -234,6 +231,7 @@ class NavigationBase extends React.Component {
             { this.menuItem("/overview", "Overview", <HomeIcon />) }
             { this.menuItem("/tap", "Tap", <Icon className={classNames("fas fa-microscope", classes.shrinkIcon)} />) }
             { this.menuItem("/top", "Top", <Icon className={classNames("fas fa-stream", classes.shrinkIcon)} />) }
+            { this.menuItem("/routes", "Top Routes", <Icon className={classNames("fas fa-random", classes.shrinkIcon)} />) }
             { this.menuItem("/servicemesh", "Service Mesh", <CloudQueueIcon className={classes.shrinkIcon} />) }
             <NavigationResources />
           </MenuList>
@@ -286,7 +284,7 @@ class NavigationBase extends React.Component {
 
         <main className={classNames(classes.content, {[classes.contentDrawerClose]: !this.state.drawerOpen})}>
           <div className={classes.toolbar} />
-          <div className="main-content"><ChildComponent {...this.props} /></div>
+          <div className="main-content"><ChildComponent {...otherProps} /></div>
         </main>
       </div>
     );

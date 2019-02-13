@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	spv1alpha1 "github.com/linkerd/linkerd2/controller/gen/apis/serviceprofile/v1alpha1"
 	spclient "github.com/linkerd/linkerd2/controller/gen/client/clientset/versioned"
 	sp "github.com/linkerd/linkerd2/controller/gen/client/informers/externalversions"
 	spinformers "github.com/linkerd/linkerd2/controller/gen/client/informers/externalversions/serviceprofile/v1alpha1"
@@ -13,30 +14,38 @@ import (
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	appsv1 "k8s.io/api/apps/v1"
 	appsv1beta2 "k8s.io/api/apps/v1beta2"
 	apiv1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/informers"
 	arinformers "k8s.io/client-go/informers/admissionregistration/v1beta1"
-	appinformers "k8s.io/client-go/informers/apps/v1beta2"
+	appv1informers "k8s.io/client-go/informers/apps/v1"
+	appv1beta2informers "k8s.io/client-go/informers/apps/v1beta2"
 	coreinformers "k8s.io/client-go/informers/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 )
 
-type ApiResource int
+// APIResource is an enum for Kubernetes API resource types, for use when
+// initializing a K8s API, to describe which resource types to interact with.
+type APIResource int
 
+// These constants enumerate Kubernetes resource types.
 const (
-	CM ApiResource = iota
+	CM APIResource = iota
 	Deploy
+	DS
 	Endpoint
 	MWC // mutating webhook configuration
 	Pod
 	RC
 	RS
 	SP
+	SS
 	Svc
 )
 
@@ -45,13 +54,15 @@ type API struct {
 	Client kubernetes.Interface
 
 	cm       coreinformers.ConfigMapInformer
-	deploy   appinformers.DeploymentInformer
+	deploy   appv1beta2informers.DeploymentInformer
+	ds       appv1informers.DaemonSetInformer
 	endpoint coreinformers.EndpointsInformer
 	mwc      arinformers.MutatingWebhookConfigurationInformer
 	pod      coreinformers.PodInformer
 	rc       coreinformers.ReplicationControllerInformer
-	rs       appinformers.ReplicaSetInformer
+	rs       appv1beta2informers.ReplicaSetInformer
 	sp       spinformers.ServiceProfileInformer
+	ss       appv1informers.StatefulSetInformer
 	svc      coreinformers.ServiceInformer
 
 	syncChecks        []cache.InformerSynced
@@ -61,7 +72,7 @@ type API struct {
 }
 
 // NewAPI takes a Kubernetes client and returns an initialized API
-func NewAPI(k8sClient kubernetes.Interface, spClient spclient.Interface, namespace string, resources ...ApiResource) *API {
+func NewAPI(k8sClient kubernetes.Interface, spClient spclient.Interface, namespace string, resources ...APIResource) *API {
 	var sharedInformers informers.SharedInformerFactory
 	var spSharedInformers sp.SharedInformerFactory
 	if namespace == "" {
@@ -98,6 +109,9 @@ func NewAPI(k8sClient kubernetes.Interface, spClient spclient.Interface, namespa
 		case Deploy:
 			api.deploy = sharedInformers.Apps().V1beta2().Deployments()
 			api.syncChecks = append(api.syncChecks, api.deploy.Informer().HasSynced)
+		case DS:
+			api.ds = sharedInformers.Apps().V1().DaemonSets()
+			api.syncChecks = append(api.syncChecks, api.ds.Informer().HasSynced)
 		case Endpoint:
 			api.endpoint = sharedInformers.Core().V1().Endpoints()
 			api.syncChecks = append(api.syncChecks, api.endpoint.Informer().HasSynced)
@@ -116,6 +130,9 @@ func NewAPI(k8sClient kubernetes.Interface, spClient spclient.Interface, namespa
 		case SP:
 			api.sp = spSharedInformers.Linkerd().V1alpha1().ServiceProfiles()
 			api.syncChecks = append(api.syncChecks, api.sp.Informer().HasSynced)
+		case SS:
+			api.ss = sharedInformers.Apps().V1().StatefulSets()
+			api.syncChecks = append(api.syncChecks, api.ss.Informer().HasSynced)
 		case Svc:
 			api.svc = sharedInformers.Core().V1().Services()
 			api.syncChecks = append(api.syncChecks, api.svc.Informer().HasSynced)
@@ -126,9 +143,7 @@ func NewAPI(k8sClient kubernetes.Interface, spClient spclient.Interface, namespa
 }
 
 // Sync waits for all informers to be synced.
-// For servers, call this asynchronously.
-// For testing, call this synchronously.
-func (api *API) Sync(readyCh chan<- struct{}) {
+func (api *API) Sync() {
 	api.sharedInformers.Start(nil)
 	api.spSharedInformers.Start(nil)
 
@@ -140,26 +155,41 @@ func (api *API) Sync(readyCh chan<- struct{}) {
 		log.Fatal("failed to sync caches")
 	}
 	log.Infof("caches synced")
-
-	if readyCh != nil {
-		close(readyCh)
-	}
 }
 
-func (api *API) Deploy() appinformers.DeploymentInformer {
+// Deploy provides access to a shared informer and lister for Deployments.
+func (api *API) Deploy() appv1beta2informers.DeploymentInformer {
 	if api.deploy == nil {
 		panic("Deploy informer not configured")
 	}
 	return api.deploy
 }
 
-func (api *API) RS() appinformers.ReplicaSetInformer {
+// DS provides access to a shared informer and lister for Daemonsets.
+func (api *API) DS() appv1informers.DaemonSetInformer {
+	if api.ds == nil {
+		panic("DS informer not configured")
+	}
+	return api.ds
+}
+
+// SS provides access to a shared informer and lister for Statefulsets.
+func (api *API) SS() appv1informers.StatefulSetInformer {
+	if api.ss == nil {
+		panic("SS informer not configured")
+	}
+	return api.ss
+}
+
+// RS provides access to a shared informer and lister for ReplicaSets.
+func (api *API) RS() appv1beta2informers.ReplicaSetInformer {
 	if api.rs == nil {
 		panic("RS informer not configured")
 	}
 	return api.rs
 }
 
+// Pod provides access to a shared informer and lister for Pods.
 func (api *API) Pod() coreinformers.PodInformer {
 	if api.pod == nil {
 		panic("Pod informer not configured")
@@ -167,6 +197,8 @@ func (api *API) Pod() coreinformers.PodInformer {
 	return api.pod
 }
 
+// RC provides access to a shared informer and lister for
+// ReplicationControllers.
 func (api *API) RC() coreinformers.ReplicationControllerInformer {
 	if api.rc == nil {
 		panic("RC informer not configured")
@@ -174,6 +206,7 @@ func (api *API) RC() coreinformers.ReplicationControllerInformer {
 	return api.rc
 }
 
+// Svc provides access to a shared informer and lister for Services.
 func (api *API) Svc() coreinformers.ServiceInformer {
 	if api.svc == nil {
 		panic("Svc informer not configured")
@@ -181,6 +214,7 @@ func (api *API) Svc() coreinformers.ServiceInformer {
 	return api.svc
 }
 
+// Endpoint provides access to a shared informer and lister for Endpoints.
 func (api *API) Endpoint() coreinformers.EndpointsInformer {
 	if api.endpoint == nil {
 		panic("Endpoint informer not configured")
@@ -188,6 +222,7 @@ func (api *API) Endpoint() coreinformers.EndpointsInformer {
 	return api.endpoint
 }
 
+// CM provides access to a shared informer and lister for ConfigMaps.
 func (api *API) CM() coreinformers.ConfigMapInformer {
 	if api.cm == nil {
 		panic("CM informer not configured")
@@ -195,6 +230,7 @@ func (api *API) CM() coreinformers.ConfigMapInformer {
 	return api.cm
 }
 
+// SP provides access to a shared informer and lister for ServiceProfiles.
 func (api *API) SP() spinformers.ServiceProfileInformer {
 	if api.sp == nil {
 		panic("SP informer not configured")
@@ -202,6 +238,7 @@ func (api *API) SP() spinformers.ServiceProfileInformer {
 	return api.sp
 }
 
+// MWC provides access to a shared informer and lister for MutatingWebhookConfigurations.
 func (api *API) MWC() arinformers.MutatingWebhookConfigurationInformer {
 	if api.mwc == nil {
 		panic("MWC informer not configured")
@@ -216,6 +253,8 @@ func (api *API) GetObjects(namespace, restype, name string) ([]runtime.Object, e
 	switch restype {
 	case k8s.Namespace:
 		return api.getNamespaces(name)
+	case k8s.DaemonSet:
+		return api.getDaemonsets(namespace, name)
 	case k8s.Deployment:
 		return api.getDeployments(namespace, name)
 	case k8s.Pod:
@@ -224,6 +263,8 @@ func (api *API) GetObjects(namespace, restype, name string) ([]runtime.Object, e
 		return api.getRCs(namespace, name)
 	case k8s.Service:
 		return api.getServices(namespace, name)
+	case k8s.StatefulSet:
+		return api.getStatefulsets(namespace, name)
 	default:
 		// TODO: ReplicaSet
 		return nil, status.Errorf(codes.Unimplemented, "unimplemented resource type: %s", restype)
@@ -264,6 +305,10 @@ func (api *API) GetPodsFor(obj runtime.Object, includeFailed bool) ([]*apiv1.Pod
 		namespace = typed.Name
 		selector = labels.Everything()
 
+	case *appsv1.DaemonSet:
+		namespace = typed.Namespace
+		selector = labels.Set(typed.Spec.Selector.MatchLabels).AsSelector()
+
 	case *appsv1beta2.Deployment:
 		namespace = typed.Namespace
 		selector = labels.Set(typed.Spec.Selector.MatchLabels).AsSelector()
@@ -277,8 +322,15 @@ func (api *API) GetPodsFor(obj runtime.Object, includeFailed bool) ([]*apiv1.Pod
 		selector = labels.Set(typed.Spec.Selector).AsSelector()
 
 	case *apiv1.Service:
+		if typed.Spec.Type == apiv1.ServiceTypeExternalName {
+			return []*apiv1.Pod{}, nil
+		}
 		namespace = typed.Namespace
 		selector = labels.Set(typed.Spec.Selector).AsSelector()
+
+	case *appsv1.StatefulSet:
+		namespace = typed.Namespace
+		selector = labels.Set(typed.Spec.Selector.MatchLabels).AsSelector()
 
 	case *apiv1.Pod:
 		// Special case for pods:
@@ -311,6 +363,56 @@ func (api *API) GetPodsFor(obj runtime.Object, includeFailed bool) ([]*apiv1.Pod
 	}
 
 	return allPods, nil
+}
+
+// GetNameAndNamespaceOf returns the name and namespace of the given object.
+func GetNameAndNamespaceOf(obj runtime.Object) (string, string, error) {
+	switch typed := obj.(type) {
+	case *apiv1.Namespace:
+		return typed.Name, typed.Name, nil
+
+	case *appsv1.DaemonSet:
+		return typed.Name, typed.Namespace, nil
+
+	case *appsv1beta2.Deployment:
+		return typed.Name, typed.Namespace, nil
+
+	case *appsv1beta2.ReplicaSet:
+		return typed.Name, typed.Namespace, nil
+
+	case *apiv1.ReplicationController:
+		return typed.Name, typed.Namespace, nil
+
+	case *apiv1.Service:
+		return typed.Name, typed.Namespace, nil
+
+	case *appsv1.StatefulSet:
+		return typed.Name, typed.Namespace, nil
+
+	case *apiv1.Pod:
+		return typed.Name, typed.Namespace, nil
+
+	default:
+		return "", "", fmt.Errorf("Cannot determine object type: %v", obj)
+	}
+}
+
+// GetNameOf returns the name of the given object.
+func GetNameOf(obj runtime.Object) (string, error) {
+	name, _, err := GetNameAndNamespaceOf(obj)
+	if err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// GetNamespaceOf returns the namespace of the given object.
+func GetNamespaceOf(obj runtime.Object) (string, error) {
+	_, namespace, err := GetNameAndNamespaceOf(obj)
+	if err != nil {
+		return "", err
+	}
+	return namespace, nil
 }
 
 // getNamespaces returns the namespace matching the specified name. If no name
@@ -430,7 +532,76 @@ func (api *API) getRCs(namespace, name string) ([]runtime.Object, error) {
 	return objects, nil
 }
 
+func (api *API) getDaemonsets(namespace, name string) ([]runtime.Object, error) {
+	var err error
+	var daemonsets []*appsv1.DaemonSet
+
+	if namespace == "" {
+		daemonsets, err = api.DS().Lister().List(labels.Everything())
+	} else if name == "" {
+		daemonsets, err = api.DS().Lister().DaemonSets(namespace).List(labels.Everything())
+	} else {
+		var ds *appsv1.DaemonSet
+		ds, err = api.DS().Lister().DaemonSets(namespace).Get(name)
+		daemonsets = []*appsv1.DaemonSet{ds}
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	objects := []runtime.Object{}
+	for _, ds := range daemonsets {
+		objects = append(objects, ds)
+	}
+
+	return objects, nil
+}
+
+func (api *API) getStatefulsets(namespace, name string) ([]runtime.Object, error) {
+	var err error
+	var statefulsets []*appsv1.StatefulSet
+
+	if namespace == "" {
+		statefulsets, err = api.SS().Lister().List(labels.Everything())
+	} else if name == "" {
+		statefulsets, err = api.SS().Lister().StatefulSets(namespace).List(labels.Everything())
+	} else {
+		var ss *appsv1.StatefulSet
+		ss, err = api.SS().Lister().StatefulSets(namespace).Get(name)
+		statefulsets = []*appsv1.StatefulSet{ss}
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	objects := []runtime.Object{}
+	for _, ss := range statefulsets {
+		objects = append(objects, ss)
+	}
+
+	return objects, nil
+}
+
 func (api *API) getServices(namespace, name string) ([]runtime.Object, error) {
+	services, err := api.GetServices(namespace, name)
+
+	if err != nil {
+		return nil, err
+	}
+
+	objects := []runtime.Object{}
+	for _, svc := range services {
+		objects = append(objects, svc)
+	}
+
+	return objects, nil
+}
+
+// GetServices returns a list of Service resources, based on input namespace and
+// name.
+func (api *API) GetServices(namespace, name string) ([]*apiv1.Service, error) {
 	var err error
 	var services []*apiv1.Service
 
@@ -444,16 +615,88 @@ func (api *API) getServices(namespace, name string) ([]runtime.Object, error) {
 		services = []*apiv1.Service{svc}
 	}
 
+	return services, err
+}
+
+// GetServicesFor returns all Service resources which include a pod of the given
+// resource object.  In other words, it returns all Services of which the given
+// resource object is a part of.
+func (api *API) GetServicesFor(obj runtime.Object, includeFailed bool) ([]*apiv1.Service, error) {
+	if svc, ok := obj.(*apiv1.Service); ok {
+		return []*apiv1.Service{svc}, nil
+	}
+
+	pods, err := api.GetPodsFor(obj, includeFailed)
 	if err != nil {
 		return nil, err
 	}
-
-	objects := []runtime.Object{}
-	for _, svc := range services {
-		objects = append(objects, svc)
+	namespace, err := GetNamespaceOf(obj)
+	if err != nil {
+		return nil, err
 	}
+	allServices, err := api.GetServices(namespace, "")
+	if err != nil {
+		return nil, err
+	}
+	services := make([]*apiv1.Service, 0)
+	for _, svc := range allServices {
+		svcPods, err := api.GetPodsFor(svc, includeFailed)
+		if err != nil {
+			return nil, err
+		}
+		if hasOverlap(pods, svcPods) {
+			services = append(services, svc)
+		}
+	}
+	return services, nil
+}
 
-	return objects, nil
+// GetServiceProfileFor returns the service profile for a given service.  We
+// first look for a matching service profile in the client's namespace.  If not
+// found, we then look in the service's namespace.  If no service profile is
+// found, we return the default service profile.
+func (api *API) GetServiceProfileFor(svc *apiv1.Service, clientNs string) *spv1alpha1.ServiceProfile {
+	dst := fmt.Sprintf("%s.%s.svc.cluster.local", svc.Name, svc.Namespace)
+	// First attempt to lookup profile in client namespace
+	if clientNs != "" {
+		p, err := api.SP().Lister().ServiceProfiles(clientNs).Get(dst)
+		if err == nil {
+			return p
+		}
+		if !apierrors.IsNotFound(err) {
+			log.Errorf("error getting service profile for %s in %s namespace: %s", dst, clientNs, err)
+		}
+	}
+	// Second, attempt to lookup profile in server namespace
+	if svc.Namespace != clientNs {
+		p, err := api.SP().Lister().ServiceProfiles(svc.Namespace).Get(dst)
+		if err == nil {
+			return p
+		}
+		if !apierrors.IsNotFound(err) {
+			log.Errorf("error getting service profile for %s in %s namespace: %s", dst, svc.Namespace, err)
+		}
+	}
+	// Not found; return default.
+	return &spv1alpha1.ServiceProfile{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: dst,
+		},
+		Spec: spv1alpha1.ServiceProfileSpec{
+			Routes: []*spv1alpha1.RouteSpec{},
+		},
+	}
+}
+
+func hasOverlap(as, bs []*apiv1.Pod) bool {
+	for _, a := range as {
+		for _, b := range bs {
+			if a.Name == b.Name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func isPendingOrRunning(pod *apiv1.Pod) bool {

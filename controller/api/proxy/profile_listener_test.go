@@ -5,9 +5,11 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/golang/protobuf/ptypes/duration"
 	pb "github.com/linkerd/linkerd2-proxy-api/go/destination"
 	httpPb "github.com/linkerd/linkerd2-proxy-api/go/http_types"
 	sp "github.com/linkerd/linkerd2/controller/gen/apis/serviceprofile/v1alpha1"
+	"github.com/linkerd/linkerd2/pkg/profiles"
 )
 
 var (
@@ -18,7 +20,7 @@ var (
 			},
 			&sp.RequestMatch{
 				Not: &sp.RequestMatch{
-					Path: "/private/.*",
+					PathRegex: "/private/.*",
 				},
 			},
 		},
@@ -54,7 +56,7 @@ var (
 	}
 
 	login = &sp.RequestMatch{
-		Path: "/login",
+		PathRegex: "/login",
 	}
 
 	pbLogin = &pb.RequestMatch{
@@ -133,6 +135,9 @@ var (
 				IsFailure: true,
 			},
 		},
+		Timeout: &duration.Duration{
+			Seconds: 10,
+		},
 	}
 
 	route2 = &sp.RouteSpec{
@@ -157,6 +162,9 @@ var (
 				IsFailure: true,
 			},
 		},
+		Timeout: &duration.Duration{
+			Seconds: 10,
+		},
 	}
 
 	profile = &sp.ServiceProfile{
@@ -173,6 +181,12 @@ var (
 			pbRoute1,
 			pbRoute2,
 		},
+		RetryBudget: &profiles.DefaultRetryBudget,
+	}
+
+	defaultPbProfile = &pb.DestinationProfile{
+		Routes:      []*pb.Route{},
+		RetryBudget: &profiles.DefaultRetryBudget,
 	}
 
 	multipleRequestMatches = &sp.ServiceProfile{
@@ -181,8 +195,8 @@ var (
 				&sp.RouteSpec{
 					Name: "multipleRequestMatches",
 					Condition: &sp.RequestMatch{
-						Method: "GET",
-						Path:   "/my/path",
+						Method:    "GET",
+						PathRegex: "/my/path",
 					},
 				},
 			},
@@ -220,8 +234,12 @@ var (
 					"route": "multipleRequestMatches",
 				},
 				ResponseClasses: []*pb.ResponseClass{},
+				Timeout: &duration.Duration{
+					Seconds: 10,
+				},
 			},
 		},
+		RetryBudget: &profiles.DefaultRetryBudget,
 	}
 
 	notEnoughRequestMatches = &sp.ServiceProfile{
@@ -308,8 +326,12 @@ var (
 						},
 					},
 				},
+				Timeout: &duration.Duration{
+					Seconds: 10,
+				},
 			},
 		},
+		RetryBudget: &profiles.DefaultRetryBudget,
 	}
 
 	oneSidedStatusRange = &sp.ServiceProfile{
@@ -371,11 +393,44 @@ var (
 			},
 		},
 	}
+
+	routeWithTimeout = &sp.RouteSpec{
+		Name:            "routeWithTimeout",
+		Condition:       login,
+		ResponseClasses: []*sp.ResponseClass{},
+		Timeout:         "200ms",
+	}
+
+	profileWithTimeout = &sp.ServiceProfile{
+		Spec: sp.ServiceProfileSpec{
+			Routes: []*sp.RouteSpec{
+				routeWithTimeout,
+			},
+		},
+	}
+
+	pbRouteWithTimeout = &pb.Route{
+		MetricsLabels: map[string]string{
+			"route": "routeWithTimeout",
+		},
+		Condition:       pbLogin,
+		ResponseClasses: []*pb.ResponseClass{},
+		Timeout: &duration.Duration{
+			Nanos: 200000000, // 200ms
+		},
+	}
+
+	pbProfileWithTimeout = &pb.DestinationProfile{
+		Routes: []*pb.Route{
+			pbRouteWithTimeout,
+		},
+		RetryBudget: &profiles.DefaultRetryBudget,
+	}
 )
 
 func TestProfileListener(t *testing.T) {
 	t.Run("Sends update", func(t *testing.T) {
-		mockGetProfileServer := &mockDestination_GetProfileServer{profilesReceived: []*pb.DestinationProfile{}}
+		mockGetProfileServer := &mockDestinationGetProfileServer{profilesReceived: []*pb.DestinationProfile{}}
 
 		listener := &profileListener{
 			stream: mockGetProfileServer,
@@ -394,7 +449,7 @@ func TestProfileListener(t *testing.T) {
 	})
 
 	t.Run("Request match with more than one field becomes ALL", func(t *testing.T) {
-		mockGetProfileServer := &mockDestination_GetProfileServer{profilesReceived: []*pb.DestinationProfile{}}
+		mockGetProfileServer := &mockDestinationGetProfileServer{profilesReceived: []*pb.DestinationProfile{}}
 
 		listener := &profileListener{
 			stream: mockGetProfileServer,
@@ -413,7 +468,7 @@ func TestProfileListener(t *testing.T) {
 	})
 
 	t.Run("Ignores request match without any fields", func(t *testing.T) {
-		mockGetProfileServer := &mockDestination_GetProfileServer{profilesReceived: []*pb.DestinationProfile{}}
+		mockGetProfileServer := &mockDestinationGetProfileServer{profilesReceived: []*pb.DestinationProfile{}}
 
 		listener := &profileListener{
 			stream: mockGetProfileServer,
@@ -428,7 +483,7 @@ func TestProfileListener(t *testing.T) {
 	})
 
 	t.Run("Response match with more than one field becomes ALL", func(t *testing.T) {
-		mockGetProfileServer := &mockDestination_GetProfileServer{profilesReceived: []*pb.DestinationProfile{}}
+		mockGetProfileServer := &mockDestinationGetProfileServer{profilesReceived: []*pb.DestinationProfile{}}
 
 		listener := &profileListener{
 			stream: mockGetProfileServer,
@@ -447,7 +502,7 @@ func TestProfileListener(t *testing.T) {
 	})
 
 	t.Run("Ignores response match without any fields", func(t *testing.T) {
-		mockGetProfileServer := &mockDestination_GetProfileServer{profilesReceived: []*pb.DestinationProfile{}}
+		mockGetProfileServer := &mockDestinationGetProfileServer{profilesReceived: []*pb.DestinationProfile{}}
 
 		listener := &profileListener{
 			stream: mockGetProfileServer,
@@ -462,7 +517,7 @@ func TestProfileListener(t *testing.T) {
 	})
 
 	t.Run("Ignores response match with invalid status range", func(t *testing.T) {
-		mockGetProfileServer := &mockDestination_GetProfileServer{profilesReceived: []*pb.DestinationProfile{}}
+		mockGetProfileServer := &mockDestinationGetProfileServer{profilesReceived: []*pb.DestinationProfile{}}
 
 		listener := &profileListener{
 			stream: mockGetProfileServer,
@@ -477,7 +532,7 @@ func TestProfileListener(t *testing.T) {
 	})
 
 	t.Run("Sends update for one sided status range", func(t *testing.T) {
-		mockGetProfileServer := &mockDestination_GetProfileServer{profilesReceived: []*pb.DestinationProfile{}}
+		mockGetProfileServer := &mockDestinationGetProfileServer{profilesReceived: []*pb.DestinationProfile{}}
 
 		listener := &profileListener{
 			stream: mockGetProfileServer,
@@ -493,9 +548,9 @@ func TestProfileListener(t *testing.T) {
 
 	t.Run("It returns when the underlying context is done", func(t *testing.T) {
 		context, cancelFn := context.WithCancel(context.Background())
-		mockGetProfileServer := &mockDestination_GetProfileServer{
+		mockGetProfileServer := &mockDestinationGetProfileServer{
 			profilesReceived: []*pb.DestinationProfile{},
-			mockDestination_Server: mockDestination_Server{
+			mockDestinationServer: mockDestinationServer{
 				contextToReturn: context,
 			},
 		}
@@ -515,6 +570,44 @@ func TestProfileListener(t *testing.T) {
 
 		if !c {
 			t.Fatalf("Expected function to be completed after the cancel()")
+		}
+	})
+
+	t.Run("Sends empty update", func(t *testing.T) {
+		mockGetProfileServer := &mockDestinationGetProfileServer{profilesReceived: []*pb.DestinationProfile{}}
+
+		listener := &profileListener{
+			stream: mockGetProfileServer,
+		}
+
+		listener.Update(nil)
+
+		numProfiles := len(mockGetProfileServer.profilesReceived)
+		if numProfiles != 1 {
+			t.Fatalf("Expecting [1] profile, got [%d]. Updates: %v", numProfiles, mockGetProfileServer.profilesReceived)
+		}
+		actualPbProfile := mockGetProfileServer.profilesReceived[0]
+		if !reflect.DeepEqual(actualPbProfile, defaultPbProfile) {
+			t.Fatalf("Expected profile sent to be [%v] but was [%v]", defaultPbProfile, actualPbProfile)
+		}
+	})
+
+	t.Run("Sends update with custom timeout", func(t *testing.T) {
+		mockGetProfileServer := &mockDestinationGetProfileServer{profilesReceived: []*pb.DestinationProfile{}}
+
+		listener := &profileListener{
+			stream: mockGetProfileServer,
+		}
+
+		listener.Update(profileWithTimeout)
+
+		numProfiles := len(mockGetProfileServer.profilesReceived)
+		if numProfiles != 1 {
+			t.Fatalf("Expecting [1] profile, got [%d]. Updates: %v", numProfiles, mockGetProfileServer.profilesReceived)
+		}
+		actualPbProfile := mockGetProfileServer.profilesReceived[0]
+		if !reflect.DeepEqual(actualPbProfile, pbProfileWithTimeout) {
+			t.Fatalf("Expected profile sent to be [%v] but was [%v]", pbProfileWithTimeout, actualPbProfile)
 		}
 	})
 }

@@ -12,7 +12,7 @@ func TestProfileWatcher(t *testing.T) {
 	for _, tt := range []struct {
 		name             string
 		k8sConfigs       []string
-		service          profileId
+		service          profileID
 		expectedProfiles []*sp.ServiceProfileSpec
 	}{
 		{
@@ -26,20 +26,20 @@ metadata:
 spec:
   routes:
   - condition:
-      path: "/x/y/z"
-    response_classes:
+      pathRegex: "/x/y/z"
+    responseClasses:
     - condition:
         status:
           min: 500
-      is_failure: true`,
+      isFailure: true`,
 			},
-			service: profileId{namespace: "linkerd", name: "foobar.ns.svc.cluster.local"},
+			service: profileID{namespace: "linkerd", name: "foobar.ns.svc.cluster.local"},
 			expectedProfiles: []*sp.ServiceProfileSpec{
 				&sp.ServiceProfileSpec{
 					Routes: []*sp.RouteSpec{
 						&sp.RouteSpec{
 							Condition: &sp.RequestMatch{
-								Path: "/x/y/z",
+								PathRegex: "/x/y/z",
 							},
 							ResponseClasses: []*sp.ResponseClass{
 								&sp.ResponseClass{
@@ -59,7 +59,7 @@ spec:
 		{
 			name:       "service without profile",
 			k8sConfigs: []string{},
-			service:    profileId{namespace: "linkerd", name: "foobar.ns"},
+			service:    profileID{namespace: "linkerd", name: "foobar.ns"},
 			expectedProfiles: []*sp.ServiceProfileSpec{
 				nil,
 			},
@@ -73,7 +73,7 @@ spec:
 
 			watcher := newProfileWatcher(k8sAPI)
 
-			k8sAPI.Sync(nil)
+			k8sAPI.Sync()
 
 			listener, cancelFn := newCollectProfileListener()
 			defer cancelFn()
