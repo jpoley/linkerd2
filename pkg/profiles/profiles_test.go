@@ -15,7 +15,7 @@ func TestValidate(t *testing.T) {
 	expectations := []spExp{
 		{
 			err: nil,
-			sp: `apiVersion: linkerd.io/v1alpha1
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: name.ns.svc.cluster.local
@@ -29,7 +29,7 @@ spec:
 		},
 		{
 			err: nil,
-			sp: `apiVersion: linkerd.io/v1alpha1
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: name.ns.svc.cluster.local
@@ -66,8 +66,8 @@ spec:
               min: 503`,
 		},
 		{
-			err: errors.New("ServiceProfile \"^.^\" has invalid name: a DNS-1123 subdomain must consist of lower case alphanumeric characters, '-' or '.', and must start and end with an alphanumeric character (e.g. 'example.com', regex used for validation is '[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*')"),
-			sp: `apiVersion: linkerd.io/v1alpha1
+			err: errors.New("ServiceProfile \"^.^\" has invalid name: a lowercase RFC 1123 subdomain must consist of lower case alphanumeric characters, '-' or '.', and must start and end with an alphanumeric character (e.g. 'example.com', regex used for validation is '[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*')"),
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: ^.^
@@ -81,7 +81,7 @@ spec:
 		},
 		{
 			err: errors.New("failed to validate ServiceProfile: error unmarshaling JSON: while decoding JSON: json: unknown field \"foo\""),
-			sp: `apiVersion: linkerd.io/v1alpha1
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: name.ns.svc.cluster.local
@@ -96,7 +96,7 @@ spec:
 		},
 		{
 			err: errors.New("failed to validate ServiceProfile: error unmarshaling JSON: while decoding JSON: json: unknown field \"foo\""),
-			sp: `apiVersion: linkerd.io/v1alpha1
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: name.ns.svc.cluster.local
@@ -111,7 +111,7 @@ spec:
 		},
 		{
 			err: errors.New("failed to validate ServiceProfile: error unmarshaling JSON: while decoding JSON: json: unknown field \"foo\""),
-			sp: `apiVersion: linkerd.io/v1alpha1
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: name.ns.svc.cluster.local
@@ -125,17 +125,8 @@ spec:
       pathRegex: /route-1`,
 		},
 		{
-			err: errors.New("ServiceProfile \"name.ns.svc.cluster.local\" has no routes"),
-			sp: `apiVersion: linkerd.io/v1alpha1
-kind: ServiceProfile
-metadata:
-  name: name.ns.svc.cluster.local
-  namespace: linkerd-ns
-spec:`,
-		},
-		{
 			err: errors.New("ServiceProfile \"name.ns.svc.cluster.local\" has a route with no condition"),
-			sp: `apiVersion: linkerd.io/v1alpha1
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: name.ns.svc.cluster.local
@@ -146,7 +137,7 @@ spec:
 		},
 		{
 			err: errors.New("ServiceProfile \"name.ns.svc.cluster.local\" has a route with no name"),
-			sp: `apiVersion: linkerd.io/v1alpha1
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: name.ns.svc.cluster.local
@@ -159,7 +150,7 @@ spec:
 		},
 		{
 			err: errors.New("failed to validate ServiceProfile: error unmarshaling JSON: while decoding JSON: json: unknown field \"foo\""),
-			sp: `apiVersion: linkerd.io/v1alpha1
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: name.ns.svc.cluster.local
@@ -176,7 +167,7 @@ spec:
 		},
 		{
 			err: errors.New("ServiceProfile \"name.ns.svc.cluster.local\" has a route with no condition"),
-			sp: `apiVersion: linkerd.io/v1alpha1
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: name.ns.svc.cluster.local
@@ -188,7 +179,7 @@ spec:
 		},
 		{
 			err: errors.New("ServiceProfile \"name.ns.svc.cluster.local\" has a route with an invalid condition: A request match must have a field set"),
-			sp: `apiVersion: linkerd.io/v1alpha1
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: name.ns.svc.cluster.local
@@ -201,7 +192,7 @@ spec:
 		},
 		{
 			err: errors.New("ServiceProfile \"name.ns.svc.cluster.local\" has a response class with no condition"),
-			sp: `apiVersion: linkerd.io/v1alpha1
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: name.ns.svc.cluster.local
@@ -217,7 +208,7 @@ spec:
 		},
 		{
 			err: errors.New("ServiceProfile \"name.ns.svc.cluster.local\" has a response class with an invalid condition: A response match must have a field set"),
-			sp: `apiVersion: linkerd.io/v1alpha1
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: name.ns.svc.cluster.local
@@ -238,7 +229,7 @@ spec:
 		},
 		{
 			err: errors.New("ServiceProfile \"name.ns.svc.cluster.local\" has a response class with an invalid condition: Range maximum must be between 100 and 599, inclusive"),
-			sp: `apiVersion: linkerd.io/v1alpha1
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: name.ns.svc.cluster.local
@@ -257,7 +248,7 @@ spec:
 		},
 		{
 			err: errors.New("ServiceProfile \"name.ns.svc.cluster.local\" has a response class with an invalid condition: Range maximum cannot be smaller than minimum"),
-			sp: `apiVersion: linkerd.io/v1alpha1
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: name.ns.svc.cluster.local
@@ -284,7 +275,7 @@ spec:
 		},
 		{
 			err: errors.New("ServiceProfile \"name.ns.svc.cluster.local\" has a response class with an invalid condition: Range minimum must be between 100 and 599, inclusive"),
-			sp: `apiVersion: linkerd.io/v1alpha1
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: name.ns.svc.cluster.local
@@ -309,8 +300,8 @@ spec:
               min: 1`,
 		},
 		{
-			err: errors.New("failed to validate ServiceProfile: error unmarshaling JSON: while decoding JSON: json: cannot unmarshal bool into Go struct field Range.min of type uint32"),
-			sp: `apiVersion: linkerd.io/v1alpha1
+			err: errors.New("failed to validate ServiceProfile: error unmarshaling JSON: while decoding JSON: json: cannot unmarshal bool into Go struct field Range.spec.routes.responseClasses.condition.all.not.status.min of type uint32"),
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: name.ns.svc.cluster.local
@@ -336,7 +327,7 @@ spec:
 		},
 		{
 			err: errors.New("ServiceProfile \"name.ns.svc.cluster.local\" RetryBudget missing TTL field"),
-			sp: `apiVersion: linkerd.io/v1alpha1
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: name.ns.svc.cluster.local
@@ -352,8 +343,8 @@ spec:
       pathRegex: /route-1`,
 		},
 		{
-			err: errors.New("ServiceProfile \"name.ns.svc.cluster.local\" RetryBudget: time: invalid duration foo"),
-			sp: `apiVersion: linkerd.io/v1alpha1
+			err: errors.New("ServiceProfile \"name.ns.svc.cluster.local\" RetryBudget: time: invalid duration \"foo\""),
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: name.ns.svc.cluster.local
@@ -371,7 +362,7 @@ spec:
 		},
 		{
 			err: errors.New("ServiceProfile \"name.ns.svc.cluster.local\" RetryBudget RetryRatio must be non-negative: -0.200000"),
-			sp: `apiVersion: linkerd.io/v1alpha1
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: name.ns.svc.cluster.local
@@ -388,8 +379,8 @@ spec:
       pathRegex: /route-1`,
 		},
 		{
-			err: errors.New("failed to validate ServiceProfile: error unmarshaling JSON: while decoding JSON: json: cannot unmarshal number -5 into Go struct field RetryBudget.minRetriesPerSecond of type uint32"),
-			sp: `apiVersion: linkerd.io/v1alpha1
+			err: errors.New("failed to validate ServiceProfile: error unmarshaling JSON: while decoding JSON: json: cannot unmarshal number -5 into Go struct field RetryBudget.spec.retryBudget.minRetriesPerSecond of type uint32"),
+			sp: `apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: name.ns.svc.cluster.local
@@ -408,6 +399,7 @@ spec:
 	}
 
 	for id, exp := range expectations {
+		exp := exp // pin
 		t.Run(fmt.Sprintf("%d", id), func(t *testing.T) {
 			err := Validate([]byte(exp.sp))
 			if err != nil || exp.err != nil {

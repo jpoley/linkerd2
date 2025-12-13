@@ -1,4 +1,59 @@
 {
+  "__inputs": [
+    {
+      "name": "datasource",
+      "label": "prometheus",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__elements": [],
+  "__requires": [
+    {
+      "type": "panel",
+      "id": "gauge",
+      "name": "Gauge",
+      "version": ""
+    },
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "8.3.3"
+    },
+    {
+      "type": "panel",
+      "id": "graph",
+      "name": "Graph (old)",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "heatmap",
+      "name": "Heatmap",
+      "version": ""
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    },
+    {
+      "type": "panel",
+      "id": "stat",
+      "name": "Stat",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "text",
+      "name": "Text",
+      "version": ""
+    }
+  ],
   "annotations": {
     "list": [
       {
@@ -22,7 +77,7 @@
     {
       "content": "<div style=\"display: flex; align-items: center\">\n  <img src=\"https://linkerd.io/images/identity/favicon/linkerd-favicon.png\" style=\"height:32px;\"/>&nbsp;\n  <span style=\"font-size: 32px\">svc/$service</span>\n</div>",
       "gridPos": {
-        "h": 2.4,
+        "h": 2,
         "w": 24,
         "x": 0,
         "y": 0
@@ -30,6 +85,7 @@
       "id": 20,
       "links": [],
       "mode": "html",
+      "options": {},
       "title": "",
       "transparent": true,
       "type": "text"
@@ -43,7 +99,10 @@
         "rgba(237, 129, 40, 0.89)",
         "#299c46"
       ],
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "decimals": null,
       "format": "percentunit",
       "gauge": {
@@ -57,7 +116,7 @@
         "h": 4,
         "w": 8,
         "x": 0,
-        "y": 2.4
+        "y": 2
       },
       "id": 5,
       "interval": null,
@@ -76,6 +135,7 @@
       "maxDataPoints": 100,
       "nullPointMode": "connected",
       "nullText": null,
+      "options": {},
       "postfix": "",
       "postfixFontSize": "50%",
       "prefix": "",
@@ -96,7 +156,7 @@
       "tableColumn": "",
       "targets": [
         {
-          "expr": "sum(irate(response_total{classification=\"success\", namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[30s])) / sum(irate(response_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[30s]))",
+          "expr": "sum(irate(response_total{classification=\"success\", namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[$__rate_interval])) / sum(irate(response_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[$__rate_interval]))",
           "format": "time_series",
           "instant": false,
           "intervalFactor": 1,
@@ -127,7 +187,10 @@
         "rgba(237, 129, 40, 0.89)",
         "#d44a3a"
       ],
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "decimals": null,
       "format": "none",
       "gauge": {
@@ -141,7 +204,7 @@
         "h": 4,
         "w": 8,
         "x": 8,
-        "y": 2.4
+        "y": 2
       },
       "id": 4,
       "interval": null,
@@ -160,6 +223,7 @@
       "maxDataPoints": 100,
       "nullPointMode": "connected",
       "nullText": null,
+      "options": {},
       "postfix": " RPS",
       "postfixFontSize": "100%",
       "prefix": "",
@@ -180,7 +244,7 @@
       "tableColumn": "",
       "targets": [
         {
-          "expr": "sum(irate(request_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[30s]))",
+          "expr": "sum(irate(request_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[$__rate_interval]))",
           "format": "time_series",
           "instant": false,
           "intervalFactor": 1,
@@ -211,7 +275,10 @@
         "rgba(237, 129, 40, 0.89)",
         "#d44a3a"
       ],
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "decimals": null,
       "format": "none",
       "gauge": {
@@ -225,7 +292,7 @@
         "h": 4,
         "w": 8,
         "x": 16,
-        "y": 2.4
+        "y": 2
       },
       "id": 81,
       "interval": null,
@@ -244,6 +311,7 @@
       "maxDataPoints": 100,
       "nullPointMode": "connected",
       "nullText": null,
+      "options": {},
       "postfix": " ms",
       "postfixFontSize": "100%",
       "prefix": "",
@@ -264,7 +332,7 @@
       "tableColumn": "",
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(irate(response_latency_ms_bucket{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[30s])) by (le, dst_service))",
+          "expr": "histogram_quantile(0.95, sum(irate(response_latency_ms_bucket{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[$__rate_interval])) by (le, dst_service))",
           "format": "time_series",
           "instant": false,
           "intervalFactor": 1,
@@ -289,14 +357,15 @@
     {
       "content": "<div class=\"text-center dashboard-header\">\n  <span>TOP-LINE TRAFFIC</span>\n</div>",
       "gridPos": {
-        "h": 2.2,
+        "h": 2,
         "w": 24,
         "x": 0,
-        "y": 6.4
+        "y": 6
       },
       "id": 17,
       "links": [],
       "mode": "html",
+      "options": {},
       "title": "",
       "transparent": true,
       "type": "text"
@@ -306,13 +375,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 1,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 8.600000000000001
+        "y": 8
       },
       "id": 67,
       "legend": {
@@ -328,6 +400,7 @@
       "linewidth": 2,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
@@ -338,7 +411,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(irate(response_total{classification=\"success\", namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[30s])) by (dst_service) / sum(irate(response_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[30s])) by (dst_service)",
+          "expr": "sum(irate(response_total{classification=\"success\", namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[$__rate_interval])) by (dst_service) / sum(irate(response_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[$__rate_interval])) by (dst_service)",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "svc/{{dst_service}}",
@@ -347,6 +420,7 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "SUCCESS RATE",
       "tooltip": {
@@ -391,13 +465,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 0,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 8.600000000000001
+        "y": 8
       },
       "id": 2,
       "legend": {
@@ -413,6 +490,7 @@
       "linewidth": 2,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
@@ -423,14 +501,14 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(irate(request_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\", tls=\"true\"}[30s])) by (dst_service)",
+          "expr": "sum(irate(request_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\", tls=\"true\"}[$__rate_interval])) by (dst_service)",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "🔒svc/{{dst_service}}",
           "refId": "A"
         },
         {
-          "expr": "sum(irate(request_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\", tls!=\"true\"}[30s])) by (dst_service)",
+          "expr": "sum(irate(request_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\", tls!=\"true\"}[$__rate_interval])) by (dst_service)",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "svc/{{dst_service}}",
@@ -439,6 +517,7 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "REQUEST RATE",
       "tooltip": {
@@ -483,13 +562,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 1,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 8.600000000000001
+        "y": 8
       },
       "id": 68,
       "legend": {
@@ -505,6 +587,7 @@
       "linewidth": 2,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
@@ -515,14 +598,14 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "histogram_quantile(0.5, sum(irate(response_latency_ms_bucket{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[30s])) by (le, dst_service))",
+          "expr": "histogram_quantile(0.5, sum(irate(response_latency_ms_bucket{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[$__rate_interval])) by (le, dst_service))",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "p50 svc/{{dst_service}}",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(irate(response_latency_ms_bucket{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[30s])) by (le, dst_service))",
+          "expr": "histogram_quantile(0.95, sum(irate(response_latency_ms_bucket{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[$__rate_interval])) by (le, dst_service))",
           "format": "time_series",
           "hide": false,
           "intervalFactor": 1,
@@ -530,7 +613,7 @@
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(irate(response_latency_ms_bucket{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[30s])) by (le, dst_service))",
+          "expr": "histogram_quantile(0.99, sum(irate(response_latency_ms_bucket{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[$__rate_interval])) by (le, dst_service))",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "p99 svc/{{dst_service}}",
@@ -539,6 +622,7 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "LATENCY",
       "tooltip": {
@@ -581,14 +665,15 @@
     {
       "content": "<div class=\"text-center dashboard-header\">\n  <span>INBOUND TRAFFIC BY DEPLOYMENT</span>\n</div>",
       "gridPos": {
-        "h": 2.2,
+        "h": 2,
         "w": 24,
         "x": 0,
-        "y": 15.600000000000001
+        "y": 15
       },
       "id": 32,
       "links": [],
       "mode": "html",
+      "options": {},
       "title": "",
       "transparent": true,
       "type": "text"
@@ -598,13 +683,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 1,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 17.8
+        "y": 17
       },
       "id": 77,
       "legend": {
@@ -620,6 +708,7 @@
       "linewidth": 2,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
@@ -630,7 +719,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(irate(response_total{classification=\"success\", namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[30s])) by (dst_service, deployment) / sum(irate(response_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[30s])) by (dst_service, deployment)",
+          "expr": "sum(irate(response_total{classification=\"success\", namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[$__rate_interval])) by (dst_service, deployment) / sum(irate(response_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[$__rate_interval])) by (dst_service, deployment)",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "deploy/{{deployment}}",
@@ -639,6 +728,7 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "SUCCESS RATE",
       "tooltip": {
@@ -683,13 +773,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 0,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 17.8
+        "y": 17
       },
       "id": 78,
       "legend": {
@@ -705,6 +798,7 @@
       "linewidth": 2,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
@@ -715,14 +809,14 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(irate(request_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\", tls=\"true\"}[30s])) by (dst_service, deployment)",
+          "expr": "sum(irate(request_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\", tls=\"true\"}[$__rate_interval])) by (dst_service, deployment)",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "🔒deploy/{{deployment}}",
           "refId": "A"
         },
         {
-          "expr": "sum(irate(request_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\", tls!=\"true\"}[30s])) by (dst_service, deployment)",
+          "expr": "sum(irate(request_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\", tls!=\"true\"}[$__rate_interval])) by (dst_service, deployment)",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "deploy/{{deployment}}",
@@ -731,6 +825,7 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "REQUEST RATE",
       "tooltip": {
@@ -774,13 +869,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 1,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 17.8
+        "y": 17
       },
       "id": 79,
       "legend": {
@@ -796,6 +894,7 @@
       "linewidth": 2,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
@@ -806,7 +905,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(response_latency_ms_bucket{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[30s])) by (le, dst_service, deployment))",
+          "expr": "histogram_quantile(0.95, sum(rate(response_latency_ms_bucket{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[$__rate_interval])) by (le, dst_service, deployment))",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "P95 deploy/{{deployment}}",
@@ -815,6 +914,7 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "P95 LATENCY",
       "tooltip": {
@@ -856,14 +956,15 @@
     {
       "content": "<div class=\"text-center dashboard-header\">\n  <span>INBOUND TRAFFIC BY POD</span>\n</div>",
       "gridPos": {
-        "h": 2.2,
+        "h": 2,
         "w": 24,
         "x": 0,
-        "y": 24.8
+        "y": 24
       },
       "id": 82,
       "links": [],
       "mode": "html",
+      "options": {},
       "title": "",
       "transparent": true,
       "type": "text"
@@ -873,13 +974,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 1,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 27
+        "y": 26
       },
       "id": 83,
       "legend": {
@@ -895,6 +999,7 @@
       "linewidth": 2,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
@@ -905,7 +1010,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(irate(response_total{classification=\"success\", namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[30s])) by (dst_service, pod) / sum(irate(response_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[30s])) by (dst_service, pod)",
+          "expr": "sum(irate(response_total{classification=\"success\", namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[$__rate_interval])) by (dst_service, pod) / sum(irate(response_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[$__rate_interval])) by (dst_service, pod)",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "po/{{pod}}",
@@ -914,6 +1019,7 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "SUCCESS RATE",
       "tooltip": {
@@ -958,13 +1064,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 0,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 27
+        "y": 26
       },
       "id": 84,
       "legend": {
@@ -980,6 +1089,7 @@
       "linewidth": 2,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
@@ -990,14 +1100,14 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(irate(request_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\", tls=\"true\"}[30s])) by (dst_service, pod)",
+          "expr": "sum(irate(request_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\", tls=\"true\"}[$__rate_interval])) by (dst_service, pod)",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "🔒po/{{pod}}",
           "refId": "A"
         },
         {
-          "expr": "sum(irate(request_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\", tls!=\"true\"}[30s])) by (dst_service, pod)",
+          "expr": "sum(irate(request_total{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\", tls!=\"true\"}[$__rate_interval])) by (dst_service, pod)",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "po/{{pod}}",
@@ -1006,6 +1116,7 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "REQUEST RATE",
       "tooltip": {
@@ -1049,13 +1160,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 1,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 27
+        "y": 26
       },
       "id": 85,
       "legend": {
@@ -1071,6 +1185,7 @@
       "linewidth": 2,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
@@ -1081,7 +1196,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(response_latency_ms_bucket{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[30s])) by (le, dst_service, pod))",
+          "expr": "histogram_quantile(0.95, sum(rate(response_latency_ms_bucket{namespace=\"$namespace\", dst_service=\"$service\", direction=\"outbound\"}[$__rate_interval])) by (le, dst_service, pod))",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "P95 po/{{pod}}",
@@ -1090,6 +1205,7 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "P95 LATENCY",
       "tooltip": {
@@ -1129,24 +1245,25 @@
       }
     },
     {
-      "content": "<div>\n  <div style=\"position: absolute; top: 0, left: 0\">\n    <a href=\"https://linkerd.io\" target=\"_blank\"><img src=\"https://linkerd.io/images/identity/svg/linkerd_primary_color_white.svg\" style=\"height: 30px;\"></a>\n  </div>\n  <div id=\"version\" style=\"position: absolute; top: 0; right: 0; font-size: 15px\">\n  </div>\n</div>\n<script type=\"text/javascript\">\nvar localReqURL =\n  window.location.href.substring(\n    0,\n    window.location.href.indexOf(\n    \"/grafana/\"\n    )\n  )+'/overview';\n\nfetch(localReqURL, {\n  credentials: 'include',\n  headers: {\n    \"Content-Type\": \"text/html; charset=utf-8\",\n  },\n})\n.then(response => response.text())\n.then(text => (new window.DOMParser()).parseFromString(text, \"text/html\"))\n.then(html => {\n  var main = html.getElementById('main');\n  var localVersion = main.getAttribute(\"data-release-version\");\n  var versionElem = document.getElementById('version');\n\n  var channel;\n  var parts = localVersion.split(\"-\", 2);\n  if (parts.length === 2) {\n    channel = parts[0];\n    versionElem.innerHTML += 'Running Linkerd ' + parts[1] + ' (' + parts[0] + ')' + '.<br>';\n  } else {\n    versionElem.innerHTML += 'Running Linkerd ' + localVersion + '.<br>';\n  }\n  var uuid = main.getAttribute(\"data-uuid\");\n\n  fetch('https://versioncheck.linkerd.io/version.json?version='+localVersion+'&uuid='+uuid+'&source=grafana', {\n    credentials: 'include',\n    headers: {\n      \"Content-Type\": \"application/json; charset=utf-8\",\n    },\n  })\n  .then(response => response.json())\n  .then(json => {\n    if (!channel || !json[channel]) {\n      versionElem.innerHTML += 'Version check failed.'\n    } else if (json[channel] === localVersion) {\n      versionElem.innerHTML += 'Linkerd is up to date.';\n    } else {\n      parts = json[channel].split(\"-\", 2);\n      if (parts.length === 2) {\n        versionElem.innerHTML += \"A new \"+parts[0]+\" version (\"+parts[1]+\") is available.\"\n      } else {\n        versionElem.innerHTML += \"A new version (\"+json[channel]+\") is available.\"\n      }\n      versionElem.innerHTML += \" <a href='https://versioncheck.linkerd.io/update' target='_blank'>Update now</a>.\";\n    }\n  });\n});\n</script>",
+      "content": "<div>\n  <div style=\"position: absolute; top: 0, left: 0\">\n    <a href=\"https://linkerd.io\" target=\"_blank\"><img src=\"https://linkerd.io/images/identity/svg/linkerd_primary_color_white.svg\" style=\"height: 30px;\"></a>\n  </div>\n  <div id=\"version\" style=\"position: absolute; top: 0; right: 0; font-size: 15px\">\n  </div>\n</div>\n<div style=\"display:none\">\n<script type=\"text/javascript\">\nvar localReqURL =\n  window.location.href.substring(\n    0,\n    window.location.href.indexOf(\n    \"/grafana/\"\n    )\n  )+'/overview';\n\nfetch(localReqURL, {\n  credentials: 'include',\n  headers: {\n    \"Content-Type\": \"text/html; charset=utf-8\",\n  },\n})\n.then(response => response.text())\n.then(text => (new window.DOMParser()).parseFromString(text, \"text/html\"))\n.then(html => {\n  var main = html.getElementById('main');\n  var localVersion = main.getAttribute(\"data-release-version\");\n  var versionElem = document.getElementById('version');\n\n  var channel;\n  var parts = localVersion.split(\"-\", 2);\n  if (parts.length === 2) {\n    channel = parts[0];\n    versionElem.innerHTML += 'Running Linkerd ' + parts[1] + ' (' + parts[0] + ')' + '.<br>';\n  } else {\n    versionElem.innerHTML += 'Running Linkerd ' + localVersion + '.<br>';\n  }\n  var uuid = main.getAttribute(\"data-uuid\");\n\n  fetch('https://versioncheck.linkerd.io/version.json?version='+localVersion+'&uuid='+uuid+'&source=grafana', {\n    credentials: 'include',\n    headers: {\n      \"Content-Type\": \"application/json; charset=utf-8\",\n    },\n  })\n  .then(response => response.json())\n  .then(json => {\n    if (!channel || !json[channel]) {\n      versionElem.innerHTML += 'Version check failed.'\n    } else if (json[channel] === localVersion) {\n      versionElem.innerHTML += 'Linkerd is up to date.';\n    } else {\n      parts = json[channel].split(\"-\", 2);\n      if (parts.length === 2) {\n        versionElem.innerHTML += \"A new \"+parts[0]+\" version (\"+parts[1]+\") is available.\"\n      } else {\n        versionElem.innerHTML += \"A new version (\"+json[channel]+\") is available.\"\n      }\n      versionElem.innerHTML += \" <a href='https://versioncheck.linkerd.io/update' target='_blank'>Update now</a>.\";\n    }\n  });\n});\n</script>\n</div>",
       "gridPos": {
         "h": 3,
         "w": 24,
         "x": 0,
-        "y": 34
+        "y": 33
       },
       "height": "1px",
       "id": 171,
       "links": [],
       "mode": "html",
+      "options": {},
       "title": "",
       "transparent": true,
       "type": "text"
     }
   ],
-  "refresh": "5s",
-  "schemaVersion": 16,
+  "refresh": "1m",
+  "schemaVersion": 18,
   "style": "dark",
   "tags": [
     "linkerd"
@@ -1154,9 +1271,27 @@
   "templating": {
     "list": [
       {
-        "allValue": null,
+        "current": {
+          "text": "default",
+          "value": "default"
+        },
+        "hide": 0,
+        "label": "Data Source",
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "type": "datasource"
+      },
+      {
+        "allValue": ".*",
         "current": {},
-        "datasource": "prometheus",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "definition": "",
         "hide": 0,
         "includeAll": false,
         "label": "Namespace",
@@ -1166,6 +1301,7 @@
         "query": "label_values(request_total, namespace)",
         "refresh": 2,
         "regex": "",
+        "skipUrlSync": false,
         "sort": 1,
         "tagValuesQuery": "",
         "tags": [],
@@ -1174,9 +1310,13 @@
         "useTags": false
       },
       {
-        "allValue": null,
+        "allValue": ".*",
         "current": {},
-        "datasource": "prometheus",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "definition": "",
         "hide": 0,
         "includeAll": false,
         "label": "Service",
@@ -1186,6 +1326,7 @@
         "query": "label_values(request_total{namespace=\"$namespace\"}, dst_service)",
         "refresh": 2,
         "regex": "",
+        "skipUrlSync": false,
         "sort": 1,
         "tagValuesQuery": "",
         "tags": [],
@@ -1194,9 +1335,16 @@
         "useTags": false
       },
       {
-        "allValue": null,
-        "current": {},
-        "datasource": "prometheus",
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "definition": "",
         "hide": 2,
         "includeAll": true,
         "label": null,
@@ -1206,6 +1354,7 @@
         "query": "label_values(request_total{dst_namespace=\"$namespace\", dst_service=\"$service\"}, deployment)",
         "refresh": 2,
         "regex": "",
+        "skipUrlSync": false,
         "sort": 1,
         "tagValuesQuery": "",
         "tags": [],
@@ -1214,9 +1363,16 @@
         "useTags": false
       },
       {
-        "allValue": null,
-        "current": {},
-        "datasource": "prometheus",
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "definition": "",
         "hide": 2,
         "includeAll": true,
         "label": null,
@@ -1226,6 +1382,7 @@
         "query": "label_values(request_total{namespace=\"$namespace\", deployment=\"$deployment\"}, dst_deployment)",
         "refresh": 2,
         "regex": "",
+        "skipUrlSync": false,
         "sort": 1,
         "tagValuesQuery": "",
         "tags": [],
@@ -1266,6 +1423,6 @@
   },
   "timezone": "",
   "title": "Linkerd Service",
-  "uid": "sRnSbbWmk",
+  "uid": "linkerd-service",
   "version": 1
 }

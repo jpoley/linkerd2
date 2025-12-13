@@ -3,94 +3,111 @@ package cmd
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"testing"
+
+	"helm.sh/helm/v3/pkg/cli/values"
 )
 
 func TestRenderCNIPlugin(t *testing.T) {
-	defaultControlPlaneNamespace := controlPlaneNamespace
-	defaultOptions := newCNIPluginOptions()
-	defaultConfig, err := validateAndBuildCNIConfig(defaultOptions)
+	defaultOptions, err := newCNIInstallOptionsWithDefaults()
 	if err != nil {
-		t.Fatalf("Unexpected error from validateAndBuildCNIConfig(): %v", err)
+		t.Fatalf("Unexpected error from newCNIInstallOptionsWithDefaults(): %v", err)
 	}
 
-	fullyConfiguredOptions := cniPluginOptions{
+	image := cniPluginImage{
+		name:       "my-docker-registry.io/awesome/cni-plugin-test-image",
+		version:    "v1.4.0",
+		pullPolicy: nil,
+	}
+	fullyConfiguredOptions := &cniPluginOptions{
 		linkerdVersion:      "awesome-linkerd-version.1",
-		dockerRegistry:      "gcr.io/linkerd-io",
+		dockerRegistry:      "cr.l5d.io/linkerd",
 		proxyControlPort:    5190,
-		proxyMetricsPort:    5191,
+		proxyAdminPort:      5191,
 		inboundPort:         5143,
 		outboundPort:        5140,
-		ignoreInboundPorts:  make([]uint, 0),
-		ignoreOutboundPorts: make([]uint, 0),
+		ignoreInboundPorts:  make([]string, 0),
+		ignoreOutboundPorts: make([]string, 0),
 		proxyUID:            12102,
-		cniPluginImage:      "my-docker-registry.io/awesome/cni-plugin-test-image",
+		proxyGID:            12102,
+		image:               image,
 		logLevel:            "debug",
 		destCNINetDir:       "/etc/kubernetes/cni/net.d",
 		destCNIBinDir:       "/opt/my-cni/bin",
+		priorityClassName:   "system-node-critical",
 	}
-	fullyConfiguredConfig, err := validateAndBuildCNIConfig(&fullyConfiguredOptions)
-	if err != nil {
-		t.Fatalf("Unexpected error from validateAndBuildCNIConfig(): %v", err)
-	}
-	fullyConfiguredConfig.Namespace = "other"
 
-	fullyConfiguredOptionsEqualDsts := cniPluginOptions{
+	fullyConfiguredOptionsEqualDsts := &cniPluginOptions{
 		linkerdVersion:      "awesome-linkerd-version.1",
-		dockerRegistry:      "gcr.io/linkerd-io",
+		dockerRegistry:      "cr.l5d.io/linkerd",
 		proxyControlPort:    5190,
-		proxyMetricsPort:    5191,
+		proxyAdminPort:      5191,
 		inboundPort:         5143,
 		outboundPort:        5140,
-		ignoreInboundPorts:  make([]uint, 0),
-		ignoreOutboundPorts: make([]uint, 0),
+		ignoreInboundPorts:  make([]string, 0),
+		ignoreOutboundPorts: make([]string, 0),
 		proxyUID:            12102,
-		cniPluginImage:      "my-docker-registry.io/awesome/cni-plugin-test-image",
+		proxyGID:            12102,
+		image:               image,
 		logLevel:            "debug",
 		destCNINetDir:       "/etc/kubernetes/cni/net.d",
 		destCNIBinDir:       "/etc/kubernetes/cni/net.d",
+		priorityClassName:   "system-node-critical",
 	}
-	fullyConfiguredConfigEqualDsts, err := validateAndBuildCNIConfig(&fullyConfiguredOptionsEqualDsts)
+
+	fullyConfiguredOptionsNoNamespace := &cniPluginOptions{
+		linkerdVersion:      "awesome-linkerd-version.1",
+		dockerRegistry:      "cr.l5d.io/linkerd",
+		proxyControlPort:    5190,
+		proxyAdminPort:      5191,
+		inboundPort:         5143,
+		outboundPort:        5140,
+		ignoreInboundPorts:  make([]string, 0),
+		ignoreOutboundPorts: make([]string, 0),
+		proxyUID:            12102,
+		proxyGID:            12102,
+		image:               image,
+		logLevel:            "debug",
+		destCNINetDir:       "/etc/kubernetes/cni/net.d",
+		destCNIBinDir:       "/opt/my-cni/bin",
+		priorityClassName:   "system-node-critical",
+	}
+
+	defaultOptionsWithSkipPorts, err := newCNIInstallOptionsWithDefaults()
 	if err != nil {
-		t.Fatalf("Unexpected error from validateAndBuildCNIConfig(): %v", err)
+		t.Fatalf("Unexpected error from newCNIInstallOptionsWithDefaults(): %v", err)
 	}
-	fullyConfiguredConfigEqualDsts.Namespace = "other"
+
+	defaultOptionsWithSkipPorts.ignoreInboundPorts = append(defaultOptionsWithSkipPorts.ignoreInboundPorts, []string{"80", "8080"}...)
+	defaultOptionsWithSkipPorts.ignoreOutboundPorts = append(defaultOptionsWithSkipPorts.ignoreOutboundPorts, []string{"443", "1000"}...)
+
+	valOpts := values.Options{
+		Values: []string{"resources.cpu.limit=1m"},
+	}
 
 	testCases := []struct {
-		*installCNIPluginConfig
-		namespace      string
+		*cniPluginOptions
+		valOpts        values.Options
 		goldenFileName string
 	}{
-		{defaultConfig, defaultControlPlaneNamespace, "testdata/install-cni-plugin_default.golden"},
-		{fullyConfiguredConfig, fullyConfiguredConfig.Namespace, "testdata/install-cni-plugin_fully_configured.golden"},
-		{fullyConfiguredConfigEqualDsts, fullyConfiguredConfigEqualDsts.Namespace, "testdata/install-cni-plugin_fully_configured_equal_dsts.golden"},
+		{defaultOptions, valOpts, "install-cni-plugin_default.golden"},
+		{fullyConfiguredOptions, values.Options{}, "install-cni-plugin_fully_configured.golden"},
+		{fullyConfiguredOptionsEqualDsts, values.Options{}, "install-cni-plugin_fully_configured_equal_dsts.golden"},
+		{fullyConfiguredOptionsNoNamespace, values.Options{}, "install-cni-plugin_fully_configured_no_namespace.golden"},
+		{defaultOptionsWithSkipPorts, values.Options{}, "install-cni-plugin_skip_ports.golden"},
 	}
 
 	for i, tc := range testCases {
+		tc := tc // pin
 		t.Run(fmt.Sprintf("%d: %s", i, tc.goldenFileName), func(t *testing.T) {
-			defer teardown(defaultControlPlaneNamespace, t)
-			controlPlaneNamespace = tc.namespace
-
 			var buf bytes.Buffer
-			err := renderCNIPlugin(&buf, tc.installCNIPluginConfig)
+			err := renderCNIPlugin(&buf, tc.valOpts, tc.cniPluginOptions)
 			if err != nil {
 				t.Fatalf("Unexpected error: %v", err)
 			}
-			content := buf.String()
-
-			goldenFileBytes, err := ioutil.ReadFile(tc.goldenFileName)
-			if err != nil {
-				t.Fatalf("Unexpected error: %v", err)
+			if err = testDataDiffer.DiffTestYAML(tc.goldenFileName, buf.String()); err != nil {
+				t.Error(err)
 			}
-			expectedContent := string(goldenFileBytes)
-			diffCompare(t, content, expectedContent)
 		})
 	}
-
-	controlPlaneNamespace = defaultControlPlaneNamespace
-}
-
-func teardown(originalNamespace string, t *testing.T) {
-	controlPlaneNamespace = originalNamespace
 }

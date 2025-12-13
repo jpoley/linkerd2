@@ -2,8 +2,9 @@ package k8s
 
 import (
 	"fmt"
-	"net/url"
+	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -11,32 +12,78 @@ import (
 // These constants are string representations of Kubernetes resource types.
 const (
 	All                   = "all"
-	Authority             = "authority"
+	ConfigMap             = "configmap"
+	CronJob               = "cronjob"
 	DaemonSet             = "daemonset"
 	Deployment            = "deployment"
+	Endpoints             = "endpoints"
+	EndpointSlices        = "endpointslices"
+	ExtWorkload           = "externalworkload"
 	Job                   = "job"
+	Link                  = "link"
+	MeshTLSAuthentication = "meshtlsauthentication"
+	MutatingWebhookConfig = "mutatingwebhookconfig"
 	Namespace             = "namespace"
+	NetworkAuthentication = "networkauthentication"
 	Pod                   = "pod"
 	ReplicationController = "replicationcontroller"
 	ReplicaSet            = "replicaset"
+	Secret                = "secret"
 	Service               = "service"
 	ServiceProfile        = "serviceprofile"
 	StatefulSet           = "statefulset"
+	Node                  = "node"
+	Server                = "server"
+	ServerAuthorization   = "serverauthorization"
+	AuthorizationPolicy   = "authorizationpolicy"
+	HTTPRoute             = "httproute"
+
+	PolicyAPIGroup         = "policy.linkerd.io"
+	PolicyServerCRDVersion = "v1beta3"
+
+	ServiceProfileAPIVersion = "linkerd.io/v1alpha2"
+	ServiceProfileKind       = "ServiceProfile"
+
+	LinkAPIGroup        = "multicluster.linkerd.io"
+	LinkAPIVersion      = "v1alpha3"
+	LinkAPIGroupVersion = "multicluster.linkerd.io/v1alpha3"
+	LinkKind            = "Link"
+
+	K8sCoreAPIGroup = "core"
+
+	NamespaceKind   = "Namespace"
+	ServerKind      = "Server"
+	HTTPRouteKind   = "HTTPRoute"
+	ExtWorkloadKind = "ExternalWorkload"
+	PodKind         = "Pod"
+
+	WorkloadAPIGroup   = "workload.linkerd.io"
+	WorkloadAPIVersion = "v1alpha1"
 
 	// special case k8s job label, to not conflict with Prometheus' job label
 	l5dJob = "k8s_job"
 )
 
+type resourceName struct {
+	short  string
+	full   string
+	plural string
+}
+
 // AllResources is a sorted list of all resources defined as constants above.
 var AllResources = []string{
-	Authority,
+	AuthorizationPolicy,
+	CronJob,
 	DaemonSet,
 	Deployment,
+	HTTPRoute,
 	Job,
 	Namespace,
 	Pod,
-	ReplicationController,
 	ReplicaSet,
+	ReplicationController,
+	Server,
+	ServerAuthorization,
 	Service,
 	ServiceProfile,
 	StatefulSet,
@@ -44,37 +91,55 @@ var AllResources = []string{
 
 // StatAllResourceTypes represents the resources to query in StatSummary when Resource.Type is "all"
 var StatAllResourceTypes = []string{
-	// TODO: add Namespace here to decrease queries from the web process
 	DaemonSet,
 	StatefulSet,
+	Job,
 	Deployment,
 	ReplicationController,
 	Pod,
 	Service,
-	Authority,
+	CronJob,
+	ReplicaSet,
 }
 
-func generateKubernetesAPIBaseURLFor(schemeHostAndPort string, namespace string, extraPathStartingWithSlash string) (*url.URL, error) {
-	if string(extraPathStartingWithSlash[0]) != "/" {
-		return nil, fmt.Errorf("Path must start with a [/], was [%s]", extraPathStartingWithSlash)
-	}
-
-	baseURL, err := generateBaseKubernetesAPIURL(schemeHostAndPort)
-	if err != nil {
-		return nil, err
-	}
-
-	urlString := fmt.Sprintf("%snamespaces/%s%s", baseURL.String(), namespace, extraPathStartingWithSlash)
-	url, err := url.Parse(urlString)
-	if err != nil {
-		return nil, fmt.Errorf("error generating namespace URL for Kubernetes API from [%s]", urlString)
-	}
-
-	return url, nil
+// CompletionResourceTypes represents resources the CLI's uses for autocompleting resource type names
+var CompletionResourceTypes = []string{
+	Namespace,
+	DaemonSet,
+	StatefulSet,
+	Job,
+	Deployment,
+	ReplicationController,
+	Pod,
+	Service,
+	CronJob,
+	ReplicaSet,
 }
 
-func generateBaseKubernetesAPIURL(schemeHostAndPort string) (*url.URL, error) {
-	return BuildURL(schemeHostAndPort, "/api/v1/")
+var resourceNames = []resourceName{
+	{"cj", "cronjob", "cronjobs"},
+	{"ds", "daemonset", "daemonsets"},
+	{"deploy", "deployment", "deployments"},
+	{"job", "job", "jobs"},
+	{"meshtlsauthn", "meshtlsauthentication", "meshtlsauthentications"},
+	{"ns", "namespace", "namespaces"},
+	{"netauthn", "networkauthentication", "networkauthentications"},
+	{"networkauthn", "networkauthentication", "networkauthentications"},
+	{"po", "pod", "pods"},
+	{"rc", "replicationcontroller", "replicationcontrollers"},
+	{"rs", "replicaset", "replicasets"},
+	{"svc", "service", "services"},
+	{"sp", "serviceprofile", "serviceprofiles"},
+	{"saz", "serverauthorization", "serverauthorizations"},
+	{"serverauthz", "serverauthorization", "serverauthorizations"},
+	{"srvauthz", "serverauthorization", "serverauthorizations"},
+	{"srv", "server", "servers"},
+	{"ap", "authorizationpolicy", "authorizationpolicies"},
+	{"httproute", "httproute", "httproutes"},
+	{"authzpolicy", "authorizationpolicy", "authorizationpolicies"},
+	{"sts", "statefulset", "statefulsets"},
+	{"ln", "link", "links"},
+	{"all", "all", "all"},
 }
 
 // GetConfig returns kubernetes config based on the current environment.
@@ -96,33 +161,23 @@ func GetConfig(fpath, kubeContext string) (*rest.Config, error) {
 // This works based on https://github.com/kubernetes/kubernetes/blob/63ffb1995b292be0a1e9ebde6216b83fc79dd988/pkg/kubectl/kubectl.go#L39
 // This also works for non-k8s resources, e.g. authorities
 func CanonicalResourceNameFromFriendlyName(friendlyName string) (string, error) {
-	switch friendlyName {
-	case "au", "authority", "authorities":
-		return Authority, nil
-	case "ds", "daemonset", "daemonsets":
-		return DaemonSet, nil
-	case "deploy", "deployment", "deployments":
-		return Deployment, nil
-	case "job", "jobs":
-		return Job, nil
-	case "ns", "namespace", "namespaces":
-		return Namespace, nil
-	case "po", "pod", "pods":
-		return Pod, nil
-	case "rc", "replicationcontroller", "replicationcontrollers":
-		return ReplicationController, nil
-	case "rs", "replicaset", "replicasets":
-		return ReplicaSet, nil
-	case "svc", "service", "services":
-		return Service, nil
-	case "sp", "serviceprofile", "serviceprofiles":
-		return ServiceProfile, nil
-	case "sts", "statefulset", "statefulsets":
-		return StatefulSet, nil
-	case "all":
-		return All, nil
+	for _, name := range resourceNames {
+		if friendlyName == name.short || friendlyName == name.full || friendlyName == name.plural {
+			return name.full, nil
+		}
 	}
+	return "", fmt.Errorf("cannot find Kubernetes canonical name from friendly name [%s]", friendlyName)
+}
 
+// PluralResourceNameFromFriendlyName returns a pluralized canonical name from common shorthands used in command line tools.
+// This works based on https://github.com/kubernetes/kubernetes/blob/63ffb1995b292be0a1e9ebde6216b83fc79dd988/pkg/kubectl/kubectl.go#L39
+// This also works for non-k8s resources, e.g. authorities
+func PluralResourceNameFromFriendlyName(friendlyName string) (string, error) {
+	for _, name := range resourceNames {
+		if friendlyName == name.short || friendlyName == name.full || friendlyName == name.plural {
+			return name.plural, nil
+		}
+	}
 	return "", fmt.Errorf("cannot find Kubernetes canonical name from friendly name [%s]", friendlyName)
 }
 
@@ -130,8 +185,8 @@ func CanonicalResourceNameFromFriendlyName(friendlyName string) (string, error) 
 // Essentially the reverse of CanonicalResourceNameFromFriendlyName
 func ShortNameFromCanonicalResourceName(canonicalName string) string {
 	switch canonicalName {
-	case Authority:
-		return "au"
+	case CronJob:
+		return "cj"
 	case DaemonSet:
 		return "ds"
 	case Deployment:
@@ -159,8 +214,9 @@ func ShortNameFromCanonicalResourceName(canonicalName string) string {
 
 // KindToL5DLabel converts a Kubernetes `kind` to a Linkerd label.
 // For example:
-//   `pod` -> `pod`
-//   `job` -> `k8s_job`
+//
+//	`pod` -> `pod`
+//	`job` -> `k8s_job`
 func KindToL5DLabel(k8sKind string) string {
 	if k8sKind == Job {
 		return l5dJob
@@ -168,18 +224,24 @@ func KindToL5DLabel(k8sKind string) string {
 	return k8sKind
 }
 
-// BuildURL returns an abosolute URL from a reference URL. It parses a base
-// rawurl and reference rawurl. Then, it tries to resolve the reference from
-// the absolute base.
-func BuildURL(base string, ref string) (*url.URL, error) {
-	u, err := url.Parse(ref)
-	if err != nil {
-		return nil, fmt.Errorf("error generating reference URL for endpoint from [%s]", base)
+// PodIdentity returns the mesh TLS identity name of this pod, as constructed
+// from the pod's service account name and other metadata.
+func PodIdentity(pod *corev1.Pod) (string, error) {
+	if pod.Status.Phase != corev1.PodRunning {
+		return "", fmt.Errorf("pod not running: %s", pod.GetName())
 	}
-	b, err := url.Parse(base)
-	if err != nil {
-		return nil, fmt.Errorf("error generating base URL for endpoint from [%s]", base)
+
+	podsa := pod.Spec.ServiceAccountName
+	podns := pod.ObjectMeta.Namespace
+	containers := append(pod.Spec.InitContainers, pod.Spec.Containers...)
+	for _, c := range containers {
+		if c.Name == ProxyContainerName {
+			for _, env := range c.Env {
+				if env.Name == "LINKERD2_PROXY_IDENTITY_LOCAL_NAME" {
+					return strings.ReplaceAll(env.Value, "$(_pod_sa).$(_pod_ns)", fmt.Sprintf("%s.%s", podsa, podns)), nil
+				}
+			}
+		}
 	}
-	url := b.ResolveReference(u)
-	return url, nil
+	return "", nil
 }

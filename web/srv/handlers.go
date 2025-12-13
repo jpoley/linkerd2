@@ -7,8 +7,10 @@ import (
 	"regexp"
 
 	"github.com/julienschmidt/httprouter"
-	pb "github.com/linkerd/linkerd2/controller/gen/public"
+	"github.com/linkerd/linkerd2/pkg/k8s"
 	profiles "github.com/linkerd/linkerd2/pkg/profiles"
+	vizPb "github.com/linkerd/linkerd2/viz/metrics-api/gen/viz"
+	"github.com/patrickmn/go-cache"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -19,11 +21,20 @@ type (
 
 	handler struct {
 		render              renderTemplate
-		apiClient           pb.ApiClient
+		apiClient           vizPb.ApiClient
+		k8sAPI              *k8s.KubernetesAPI
 		uuid                string
+		version             string
 		controllerNamespace string
-		singleNamespace     bool
-		grafanaProxy        *grafanaProxy
+		clusterDomain       string
+		grafana             string
+		grafanaExternalURL  string
+		grafanaPrefix       string
+		jaeger              string
+		grafanaProxy        *reverseProxy
+		jaegerProxy         *reverseProxy
+		hc                  healthChecker
+		statCache           *cache.Cache
 	}
 )
 
@@ -36,22 +47,16 @@ func (h *handler) handleIndex(w http.ResponseWriter, req *http.Request, p httpro
 
 	params := appParams{
 		UUID:                h.uuid,
+		ReleaseVersion:      h.version,
 		ControllerNamespace: h.controllerNamespace,
-		SingleNamespace:     h.singleNamespace,
 		PathPrefix:          pathPfx,
+		Grafana:             h.grafana,
+		GrafanaExternalURL:  h.grafanaExternalURL,
+		GrafanaPrefix:       h.grafanaPrefix,
+		Jaeger:              h.jaeger,
 	}
 
-	version, err := h.apiClient.Version(req.Context(), &pb.Empty{}) // TODO: remove and call /api/version from web app
-	if err != nil {
-		params.Error = true
-		params.ErrorMessage = err.Error()
-		log.Error(err)
-	} else {
-		params.Data = *version
-	}
-
-	err = h.render(w, "app.tmpl.html", "base", params)
-
+	err := h.render(w, "app.tmpl.html", "base", params)
 	if err != nil {
 		log.Error(err)
 	}
@@ -69,7 +74,7 @@ func (h *handler) handleProfileDownload(w http.ResponseWriter, req *http.Request
 	}
 
 	profileYaml := &bytes.Buffer{}
-	err := profiles.RenderProfileTemplate(namespace, service, profileYaml)
+	err := profiles.RenderProfileTemplate(namespace, service, h.clusterDomain, profileYaml, "yaml")
 
 	if err != nil {
 		log.Error(err)
@@ -77,7 +82,7 @@ func (h *handler) handleProfileDownload(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	dispositionHeaderVal := fmt.Sprintf("attachment; filename='%s-profile.yml'", service)
+	dispositionHeaderVal := fmt.Sprintf("attachment; filename=%s-profile.yml", service)
 
 	w.Header().Set("Content-Type", "text/yaml")
 	w.Header().Set("Content-Disposition", dispositionHeaderVal)
@@ -87,4 +92,8 @@ func (h *handler) handleProfileDownload(w http.ResponseWriter, req *http.Request
 
 func (h *handler) handleGrafana(w http.ResponseWriter, req *http.Request, p httprouter.Params) {
 	h.grafanaProxy.ServeHTTP(w, req)
+}
+
+func (h *handler) handleJaeger(w http.ResponseWriter, req *http.Request, p httprouter.Params) {
+	h.jaegerProxy.ServeHTTP(w, req)
 }

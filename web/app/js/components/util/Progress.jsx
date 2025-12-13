@@ -1,6 +1,6 @@
 import LinearProgress from '@material-ui/core/LinearProgress';
-import { dashboardTheme } from './theme.js';
 import { withStyles } from '@material-ui/core/styles';
+import { dashboardTheme } from './theme.js';
 
 const colorLookup = {
   good: {
@@ -18,10 +18,10 @@ const colorLookup = {
   default: {
     colorPrimary: dashboardTheme.status.light.default,
     barColorPrimary: dashboardTheme.status.dark.default,
-  }
+  },
 };
 
-export const StyledProgress = (classification = "default") => withStyles({
+export const StyledProgress = (classification = 'default') => withStyles({
   root: {
     flexGrow: 1,
   },

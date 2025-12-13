@@ -1,22 +1,16 @@
-#!/bin/sh
+#!/usr/bin/env sh
 
 set -eu
 
-gen() {
+rm -rf controller/gen/common controller/gen/config viz/metrics-api/gen viz/tap/gen
+mkdir -p controller/gen/common/net viz/metrics-api/gen/viz viz/tap/gen/tap
 
-    rm -rf controller/gen/common controller/gen/controller controller/gen/public
-    mkdir -p controller/gen
+protoc -I proto --go_out=paths=source_relative:controller/gen proto/common/net.proto
+protoc -I proto -I viz/metrics-api/proto --go_out=paths=source_relative:viz/metrics-api/gen viz/metrics-api/proto/viz.proto
+protoc -I proto -I viz/metrics-api/proto --go-grpc_out=paths=source_relative:viz/metrics-api/gen/viz viz/metrics-api/proto/viz.proto
+protoc -I proto -I viz/tap/proto -I viz/metrics-api/proto --go_out=paths=source_relative:viz/tap/gen viz/tap/proto/viz_tap.proto
+protoc -I proto -I viz/tap/proto -I viz/metrics-api/proto --go-grpc_out=paths=source_relative:viz/tap/gen/tap viz/tap/proto/viz_tap.proto
 
-    for f in $@; do
-        bin/protoc -I proto --go_out="plugins=grpc:$GOPATH/src" "$f"
-    done
-
-    git add controller/gen
-}
-
-go install ./vendor/github.com/golang/protobuf/protoc-gen-go
-
-gen proto/common/healthcheck.proto \
-    proto/controller/discovery.proto \
-    proto/controller/tap.proto \
-    proto/public.proto
+mv controller/gen/common/net.pb.go   controller/gen/common/net/
+mv viz/metrics-api/gen/viz.pb.go viz/metrics-api/gen/viz/viz.pb.go
+mv viz/tap/gen/viz_tap.pb.go viz/tap/gen/tap/viz_tap.pb.go

@@ -1,31 +1,32 @@
 package k8s
 
 import (
-	spclient "github.com/linkerd/linkerd2/controller/gen/client/clientset/versioned"
-	"github.com/linkerd/linkerd2/pkg/k8s"
-	"k8s.io/client-go/kubernetes"
+	"fmt"
+
+	l5dcrdclient "github.com/linkerd/linkerd2/controller/gen/client/clientset/versioned"
+	"github.com/linkerd/linkerd2/pkg/prometheus"
+	"k8s.io/client-go/rest"
 
 	// Load all the auth plugins for the cloud providers.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 )
 
-// NewClientSet returns a Kubernetes client for the given configuration.
-func NewClientSet(kubeConfig string) (*kubernetes.Clientset, error) {
-	config, err := k8s.GetConfig(kubeConfig, "")
+func wrapTransport(config *rest.Config, telemetryName string) (*rest.Config, error) {
+	wt := config.WrapTransport
+	wrapped, err := prometheus.ClientWithTelemetry(telemetryName, wt)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to wrap transport: %w", err)
 	}
-
-	return kubernetes.NewForConfig(config)
+	config.WrapTransport = wrapped
+	return config, nil
 }
 
-// NewSpClientSet returns a Kubernetes ServiceProfile client for the given
+// NewL5DCRDClient returns a Linkerd controller client for the given
 // configuration.
-func NewSpClientSet(kubeConfig string) (*spclient.Clientset, error) {
-	config, err := k8s.GetConfig(kubeConfig, "")
+func NewL5DCRDClient(kubeConfig *rest.Config) (*l5dcrdclient.Clientset, error) {
+	config, err := wrapTransport(kubeConfig, "l5dCrd")
 	if err != nil {
 		return nil, err
 	}
-
-	return spclient.NewForConfig(config)
+	return l5dcrdclient.NewForConfig(config)
 }

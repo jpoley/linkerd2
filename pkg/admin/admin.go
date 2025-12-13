@@ -1,52 +1,74 @@
 package admin
 
 import (
+	"fmt"
 	"net/http"
+	"net/http/pprof"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	log "github.com/sirupsen/logrus"
 )
 
 type handler struct {
 	promHandler http.Handler
+	enablePprof bool
+	ready       *bool
 }
 
-// StartServer starts an admin server listening on a given address.
-func StartServer(addr string) {
-	log.Infof("starting admin server on %s", addr)
-
+// NewServer returns an initialized `http.Server`, configured to listen on an address.
+func NewServer(addr string, enablePprof bool, ready *bool) *http.Server {
 	h := &handler{
 		promHandler: promhttp.Handler(),
+		enablePprof: enablePprof,
+		ready:       ready,
 	}
 
-	s := &http.Server{
-		Addr:         addr,
-		Handler:      h,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 15 * time.Second,
 	}
-
-	log.Fatal(s.ListenAndServe())
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	debugPathPrefix := "/debug/pprof/"
+	if h.enablePprof && strings.HasPrefix(req.URL.Path, debugPathPrefix) {
+		switch req.URL.Path {
+		case fmt.Sprintf("%scmdline", debugPathPrefix):
+			pprof.Cmdline(w, req)
+		case fmt.Sprintf("%sprofile", debugPathPrefix):
+			pprof.Profile(w, req)
+		case fmt.Sprintf("%strace", debugPathPrefix):
+			pprof.Trace(w, req)
+		case fmt.Sprintf("%ssymbol", debugPathPrefix):
+			pprof.Symbol(w, req)
+		default:
+			pprof.Index(w, req)
+		}
+		return
+	}
 	switch req.URL.Path {
 	case "/metrics":
 		h.promHandler.ServeHTTP(w, req)
 	case "/ping":
-		h.servePing(w, req)
+		h.servePing(w)
 	case "/ready":
-		h.serveReady(w, req)
+		h.serveReady(w)
 	default:
 		http.NotFound(w, req)
 	}
 }
 
-func (h *handler) servePing(w http.ResponseWriter, req *http.Request) {
+func (h *handler) servePing(w http.ResponseWriter) {
 	w.Write([]byte("pong\n"))
 }
 
-func (h *handler) serveReady(w http.ResponseWriter, req *http.Request) {
-	w.Write([]byte("ok\n"))
+func (h *handler) serveReady(w http.ResponseWriter) {
+	if *h.ready {
+		w.Write([]byte("ok\n"))
+	} else {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("not ready\n"))
+	}
 }

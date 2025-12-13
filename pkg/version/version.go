@@ -12,6 +12,8 @@ import (
 // DO NOT EDIT
 var Version = undefinedVersion
 
+var LinkerdCNIVersion = "v1.6.4"
+
 const (
 	// undefinedVersion should take the form `channel-version` to conform to
 	// channelVersion functions.
@@ -39,17 +41,15 @@ func match(expectedVersion, actualVersion string) error {
 		return errors.New("expected version is empty")
 	} else if actualVersion == "" {
 		return errors.New("actual version is empty")
-	} else if actualVersion == expectedVersion {
-		return nil
 	}
 
 	actual, err := parseChannelVersion(actualVersion)
 	if err != nil {
-		return fmt.Errorf("failed to parse actual version: %s", err)
+		return fmt.Errorf("failed to parse actual version: %w", err)
 	}
 	expected, err := parseChannelVersion(expectedVersion)
 	if err != nil {
-		return fmt.Errorf("failed to parse expected version: %s", err)
+		return fmt.Errorf("failed to parse expected version: %w", err)
 	}
 
 	if actual.channel != expected.channel {
@@ -57,6 +57,10 @@ func match(expectedVersion, actualVersion string) error {
 			actual, expected)
 	}
 
-	return fmt.Errorf("is running version %s but the latest %s version is %s",
-		actual.version, actual.channel, expected.version)
+	if actual.version != expected.version || !actual.hotpatchEqual(expected) {
+		return fmt.Errorf("is running version %s but the latest %s version is %s",
+			actual.versionWithHotpatch(), actual.channel, expected.versionWithHotpatch())
+	}
+
+	return nil
 }

@@ -1,58 +1,57 @@
 import 'whatwg-fetch';
-import { emptyMetric, processMultiResourceRollup, processSingleResourceRollup } from './util/MetricUtils.jsx';
-import { resourceTypeToCamelCase, singularResource } from './util/Utils.js';
-import AddResources from './AddResources.jsx';
-import ErrorBanner from './ErrorBanner.jsx';
 import Grid from '@material-ui/core/Grid';
-import MetricsTable from './MetricsTable.jsx';
-import Octopus from './Octopus.jsx';
 import PropTypes from 'prop-types';
 import React from 'react';
-import SimpleChip from './util/Chip.jsx';
-import Spinner from './util/Spinner.jsx';
-import TopRoutesTabs from './TopRoutesTabs.jsx';
+import { Trans } from '@lingui/macro';
 import Typography from '@material-ui/core/Typography';
 import _filter from 'lodash/filter';
 import _get from 'lodash/get';
+import _indexOf from 'lodash/indexOf';
 import _isEmpty from 'lodash/isEmpty';
 import _isEqual from 'lodash/isEqual';
+import _isNil from 'lodash/isNil';
 import _merge from 'lodash/merge';
 import _reduce from 'lodash/reduce';
+import TopRoutesTabs from './TopRoutesTabs.jsx';
+import Spinner from './util/Spinner.jsx';
+import SimpleChip from './util/Chip.jsx';
+import ServiceDetail from './ServiceDetail.jsx';
+import Octopus from './Octopus.jsx';
+import MetricsTable from './MetricsTable.jsx';
+import ErrorBanner from './ErrorBanner.jsx';
+import EdgesTable from './EdgesTable.jsx';
+import AddResources from './AddResources.jsx';
+import { resourceTypeToCamelCase, singularResource } from './util/Utils.js';
+import { handlePageVisibility, withPageVisibility } from './util/PageVisibility.jsx';
+import { emptyMetric, processMultiResourceRollup, processSingleResourceRollup } from './util/MetricUtils.jsx';
+import { processEdges } from './util/EdgesUtils.jsx';
 import { withContext } from './util/AppContext.jsx';
 
 // if there has been no traffic for some time, show a warning
 const showNoTrafficMsgDelayMs = 6000;
+// resource types supported when querying API for edge data
+const edgeDataAvailable = ['cronjob', 'daemonset', 'deployment', 'job', 'pod', 'replicaset', 'replicationcontroller', 'statefulset'];
 
 const getResourceFromUrl = (match, pathPrefix) => {
-  let resource = {
-    namespace: match.params.namespace
+  const resource = {
+    namespace: match.params.namespace,
   };
-  let regExp = RegExp(`${pathPrefix || ""}/namespaces/${match.params.namespace}/([^/]+)/([^/]+)`);
-  let urlParts = match.url.match(regExp);
+  const regExp = RegExp(`${pathPrefix || ''}/namespaces/${match.params.namespace}/([^/]+)/([^/]+)`);
+  const urlParts = match.url.match(regExp);
 
   resource.type = singularResource(urlParts[1]);
   resource.name = urlParts[2];
 
   if (match.params[resource.type] !== resource.name) {
-    console.error("Failed to extract resource from URL");
+    console.error('Failed to extract resource from URL');
   }
   return resource;
 };
 
 export class ResourceDetailBase extends React.Component {
-  static propTypes = {
-    api: PropTypes.shape({
-      PrefixedLink: PropTypes.func.isRequired,
-    }).isRequired,
-    match: PropTypes.shape({
-      url: PropTypes.string.isRequired
-    }).isRequired,
-    pathPrefix: PropTypes.string.isRequired
-  }
-
   constructor(props) {
     super(props);
-    this.api = this.props.api;
+    this.api = props.api;
     this.unmeshedSources = {};
     this.handleApiError = this.handleApiError.bind(this);
     this.loadFromServer = this.loadFromServer.bind(this);
@@ -60,52 +59,68 @@ export class ResourceDetailBase extends React.Component {
   }
 
   getInitialState(match, pathPrefix) {
-    let resource = getResourceFromUrl(match, pathPrefix);
+    const resource = getResourceFromUrl(match, pathPrefix);
     return {
       namespace: resource.namespace,
       resourceName: resource.name,
       resourceType: resource.type,
-      resource,
       lastMetricReceivedTime: Date.now(),
+      isTcpOnly: false, // whether this resource only has TCP traffic
       pollingInterval: 2000,
       resourceMetrics: [],
       podMetrics: [], // metrics for all pods whose owner is this resource
       upstreamMetrics: {}, // metrics for resources who send traffic to this resource
-      downstreamMetrics: {}, // metrics for resources who this resouce sends traffic to
+      downstreamMetrics: {}, // metrics for resources who this resource sends traffic to
       unmeshedSources: {},
       resourceIsMeshed: true,
       pendingRequests: false,
       loaded: false,
-      error: null
+      error: null,
+      resourceDefinition: null,
+      // queryForDefinition is set to false now due to we are not currently using
+      // resource definition. This can change in the future
+      queryForDefinition: false,
     };
   }
 
   componentDidMount() {
-    this.loadFromServer();
-    this.timerId = window.setInterval(this.loadFromServer, this.state.pollingInterval);
+    this.startServerPolling();
   }
 
   componentDidUpdate(prevProps) {
-    if (!_isEqual(prevProps.match.url, this.props.match.url)) {
+    const { match, pathPrefix, isPageVisible } = this.props;
+
+    if (!_isEqual(prevProps.match.url, match.url)) {
       // React won't unmount this component when switching resource pages so we need to clear state
       this.api.cancelCurrentRequests();
       this.unmeshedSources = {};
-      this.setState(this.getInitialState(this.props.match, this.props.pathPrefix));
+      this.resetState(match, pathPrefix);
     }
+
+    handlePageVisibility({
+      prevVisibilityState: prevProps.isPageVisible,
+      currentVisibilityState: isPageVisible,
+      onVisible: () => this.startServerPolling(),
+      onHidden: () => this.stopServerPolling(),
+    });
+  }
+
+  resetState(match, pathPrefix) {
+    this.setState(this.getInitialState(match, pathPrefix));
   }
 
   componentWillUnmount() {
-    window.clearInterval(this.timerId);
-    this.api.cancelCurrentRequests();
+    this.stopServerPolling();
   }
 
+  // if we're displaying a pod detail page, only display pod metrics
+  // if we're displaying another type of resource page, display metrics for
+  // rcs, deploys, replicasets, etc but not pods or authorities
   getDisplayMetrics(metricsByResource) {
-    // if we're displaying a pod detail page, only display pod metrics
-    // if we're displaying another type of resource page, display metrics for
-    // rcs, deploys, replicasets, etc but not pods or authorities
-    let shouldExclude = this.state.resourceType === "pod" ?
-      r => r !== "pod" :
-      r => r === "pod" || r === "authority"  || r === "service";
+    const { resourceType } = this.state;
+    const shouldExclude = resourceType === 'pod' ?
+      r => r !== 'pod' :
+      r => r === 'pod' || r === 'authority' || r === 'service';
     return _reduce(metricsByResource, (mem, resourceMetrics, resource) => {
       if (shouldExclude(resource)) {
         return mem;
@@ -114,63 +129,137 @@ export class ResourceDetailBase extends React.Component {
     }, []);
   }
 
+  startServerPolling() {
+    const { pollingInterval } = this.state;
+    this.loadFromServer();
+    this.timerId = window.setInterval(this.loadFromServer, pollingInterval);
+  }
+
+  stopServerPolling() {
+    window.clearInterval(this.timerId);
+    this.api.cancelCurrentRequests();
+    this.setState({ pendingRequests: false });
+  }
+
   loadFromServer() {
-    if (this.state.pendingRequests) {
+    const { pendingRequests, queryForDefinition, resourceType, namespace, resourceName, resourceDefinition, lastMetricReceivedTime } = this.state;
+
+    if (pendingRequests) {
       return; // don't make more requests if the ones we sent haven't completed
     }
     this.setState({ pendingRequests: true });
 
-    let { resource } = this.state;
+    let apiRequests =
+      [
+        // inbound stats for this resource
+        this.api.fetchMetrics(
+          `${this.api.urlsForResource(resourceType, namespace, true)}&resource_name=${resourceName}`,
+        ),
+        // upstream resources of this resource (meshed traffic only)
+        this.api.fetchMetrics(
+          `${this.api.urlsForResource('all')}&to_name=${resourceName}&to_type=${resourceType}&to_namespace=${namespace}`,
+        ),
+        // downstream resources of this resource (meshed traffic only)
+        this.api.fetchMetrics(
+          `${this.api.urlsForResource('all')}&from_name=${resourceName}&from_type=${resourceType}&from_namespace=${namespace}`,
+        ),
+      ];
 
-    this.api.setCurrentRequests([
-      // inbound stats for this resource
-      this.api.fetchMetrics(
-        `${this.api.urlsForResource(resource.type, resource.namespace)}&resource_name=${resource.name}`
-      ),
+    // Fetch pods in a resource and their metrics (except when resource type is pod)
+    if (resourceType !== 'pod') {
       // list of all pods in this namespace (hack since we can't currently query for all pods in a resource)
-      this.api.fetchPods(resource.namespace),
+      apiRequests.push(this.api.fetchPods(namespace));
       // metrics for all pods in this namespace (hack, continued)
-      this.api.fetchMetrics(
-        `${this.api.urlsForResource("pod", resource.namespace)}`
-      ),
-      // upstream resources of this resource (meshed traffic only)
-      this.api.fetchMetrics(
-        `${this.api.urlsForResource("all")}&to_name=${resource.name}&to_type=${resource.type}&to_namespace=${resource.namespace}`
-      ),
-      // downstream resources of this resource (meshed traffic only)
-      this.api.fetchMetrics(
-        `${this.api.urlsForResource("all")}&from_name=${resource.name}&from_type=${resource.type}&from_namespace=${resource.namespace}`
-      )
-    ]);
+      apiRequests.push(this.api.fetchMetrics(`${this.api.urlsForResource('pod', namespace, true)}`));
+    }
+
+    if (queryForDefinition) {
+      // definition for this resource
+      apiRequests.push(this.api.fetchResourceDefinition(namespace, resourceType, resourceName));
+    }
+
+    if (_indexOf(edgeDataAvailable, resourceType) > 0) {
+      apiRequests = apiRequests.concat([
+        this.api.fetchEdges(namespace, resourceType),
+      ]);
+    }
+
+    this.api.setCurrentRequests(apiRequests);
 
     Promise.all(this.api.getCurrentPromises())
-      .then(([resourceRsp, podListRsp, podMetricsRsp, upstreamRsp, downstreamRsp]) => {
-        let resourceMetrics = processSingleResourceRollup(resourceRsp);
-        let podMetrics = processSingleResourceRollup(podMetricsRsp);
-        let upstreamMetrics = processMultiResourceRollup(upstreamRsp);
-        let downstreamMetrics = processMultiResourceRollup(downstreamRsp);
+      .then(apiResponses => {
+        let podMetrics;
+        let resourceRsp;
+        let upstreamRsp;
+        let downstreamRsp;
+        let podListRsp;
+        let podMetricsRsp;
+        let rsp;
+
+        if (resourceType === 'pod') {
+          [resourceRsp, upstreamRsp, downstreamRsp, ...rsp] = [...apiResponses];
+        } else {
+          [resourceRsp, upstreamRsp, downstreamRsp, podListRsp, podMetricsRsp, ...rsp] = [...apiResponses];
+          podMetrics = processSingleResourceRollup(podMetricsRsp, resourceType);
+        }
+
+        const resourceMetrics = processSingleResourceRollup(resourceRsp, resourceType);
+        const upstreamMetrics = processMultiResourceRollup(upstreamRsp, resourceType);
+        const downstreamMetrics = processMultiResourceRollup(downstreamRsp, resourceType);
+        const newResourceDefinition = queryForDefinition ? rsp[0] : resourceDefinition;
+
+        let edges = [];
+        if (_indexOf(edgeDataAvailable, resourceType) > 0) {
+          const edgesRsp = rsp[rsp.length - 1];
+          edges = processEdges(edgesRsp, resourceName);
+        }
 
         // INEFFICIENT: get metrics for all the pods belonging to this resource.
         // Do this by querying for metrics for all pods in this namespace and then filtering
         // out those pods whose owner is not this resource
         // TODO: fix (#1467)
-        let podBelongsToResource = _reduce(podListRsp.pods, (mem, pod) => {
-          if (_get(pod, resourceTypeToCamelCase(resource.type)) === resource.namespace + "/" + resource.name) {
-            mem[pod.name] = true;
-          }
+        const resourceKey = `${namespace}/${resourceName}`;
+        let podMetricsForResource;
 
-          return mem;
-        }, {});
+        if (resourceType === 'pod') {
+          podMetricsForResource = resourceMetrics;
+        } else {
+          const podBelongsToResource = _reduce(podListRsp.pods, (mem, pod) => {
+            if (_get(pod, resourceTypeToCamelCase(resourceType)) === resourceKey) {
+              // pod.name in podListRsp is of the form `namespace/pod-name`
+              mem[pod.name] = true;
+            }
 
-        let podMetricsForResource = _filter(podMetrics, pod => podBelongsToResource[pod.namespace + "/" + pod.name]);
-        let resourceIsMeshed = true;
-        if (!_isEmpty(this.state.resourceMetrics)) {
-          resourceIsMeshed = _get(this.state.resourceMetrics, '[0].pods.meshedPods') > 0;
+            return mem;
+          }, {});
+
+          // get all pods whose owner is this resource
+          podMetricsForResource = _filter(podMetrics, pod => podBelongsToResource[`${pod.namespace}/${pod.name}`]);
         }
 
-        let lastMetricReceivedTime = this.state.lastMetricReceivedTime;
-        if (!_isEmpty(resourceMetrics[0]) && resourceMetrics[0].totalRequests !== 0) {
-          lastMetricReceivedTime = Date.now();
+        let resourceIsMeshed = true;
+        if (!_isEmpty(resourceMetrics)) {
+          resourceIsMeshed = _get(resourceMetrics, '[0].pods.meshedPods') > 0;
+        }
+
+        let hasHttp = false;
+        let hasTcp = false;
+        const metric = resourceMetrics[0];
+        if (!_isEmpty(metric)) {
+          hasHttp = !_isNil(metric.requestRate) && !_isEmpty(metric.latency);
+
+          if (!_isEmpty(metric.tcp)) {
+            const { tcp } = metric;
+            hasTcp = tcp.openConnections > 0 || tcp.readBytes > 0 || tcp.writeBytes > 0;
+          }
+        }
+
+        const isTcpOnly = !hasHttp && hasTcp;
+
+        // figure out when the last traffic this resource received was so we can show a no traffic message
+        let newLastMetricReceivedTime = lastMetricReceivedTime;
+        if (hasHttp || hasTcp) {
+          newLastMetricReceivedTime = Date.now();
         }
 
         this.setState({
@@ -179,11 +268,14 @@ export class ResourceDetailBase extends React.Component {
           podMetrics: podMetricsForResource,
           upstreamMetrics,
           downstreamMetrics,
-          lastMetricReceivedTime,
+          edges,
+          lastMetricReceivedTime: newLastMetricReceivedTime,
+          isTcpOnly,
           loaded: true,
           pendingRequests: false,
           error: null,
-          unmeshedSources: this.unmeshedSources // in place of debouncing, just update this when we update the rest of the state
+          unmeshedSources: this.unmeshedSources, // in place of debouncing, just update this when we update the rest of the state
+          resourceDefinition: newResourceDefinition,
         });
       })
       .catch(this.handleApiError);
@@ -197,70 +289,90 @@ export class ResourceDetailBase extends React.Component {
     this.setState({
       loaded: true,
       pendingRequests: false,
-      error: e
+      error: e,
     });
-  }
+  };
 
   updateUnmeshedSources = obj => {
     this.unmeshedSources = obj;
-  }
+  };
 
   banner = () => {
-    if (!this.state.error) {
-      return;
-    }
-
-    return <ErrorBanner message={this.state.error} />;
-  }
+    const { error } = this.state;
+    return error ? <ErrorBanner message={error} /> : null;
+  };
 
   content = () => {
-    if (!this.state.loaded && !this.state.error) {
-      return <Spinner />;
-    }
-
-    let {
+    const {
       resourceName,
       resourceType,
       namespace,
       resourceMetrics,
+      edges,
       unmeshedSources,
       resourceIsMeshed,
-      lastMetricReceivedTime
+      lastMetricReceivedTime,
+      isTcpOnly,
+      loaded,
+      error,
+      upstreamMetrics,
+      downstreamMetrics,
+      podMetrics,
     } = this.state;
+    const { pathPrefix } = this.props;
 
-    let query = {
+    if (!loaded && !error) {
+      return <Spinner />;
+    }
+
+    const query = {
       resourceName,
       resourceType,
-      namespace
+      namespace,
     };
 
-    let unmeshed = _filter(unmeshedSources, d => d.type !== "pod")
+    const unmeshed = _filter(unmeshedSources, d => d.type !== 'pod')
       .map(d => _merge({}, emptyMetric, d, {
         unmeshed: true,
         pods: {
           totalPods: d.pods.length,
-          meshedPods: 0
-        }
+          meshedPods: 0,
+        },
       }));
 
-    let upstreamMetrics = this.getDisplayMetrics(this.state.upstreamMetrics);
-    let downstreamMetrics = this.getDisplayMetrics(this.state.downstreamMetrics);
+    const upstreamDisplayMetrics = this.getDisplayMetrics(upstreamMetrics);
+    const downstreamDisplayMetrics = this.getDisplayMetrics(downstreamMetrics);
 
-    let upstreams = upstreamMetrics.concat(unmeshed);
+    const upstreams = upstreamDisplayMetrics.concat(unmeshed);
 
-    let showNoTrafficMsg = resourceIsMeshed && (Date.now() - lastMetricReceivedTime > showNoTrafficMsgDelayMs);
+    const showNoTrafficMsg = resourceIsMeshed && (Date.now() - lastMetricReceivedTime > showNoTrafficMsgDelayMs);
 
+    if (resourceType === 'service') {
+      return (
+        <ServiceDetail
+          resourceName={resourceName}
+          upstreams={upstreams}
+          api={this.api}
+          upstreamDisplayMetrics={upstreamDisplayMetrics}
+          pathPrefix={pathPrefix}
+          isTcpOnly={isTcpOnly}
+          resourceMetrics={resourceMetrics}
+          unmeshedSources={unmeshedSources}
+          query={query}
+          updateUnmeshedSources={this.updateUnmeshedSources} />
+      );
+    }
     return (
       <div>
-        <Grid container justify="space-between" alignItems="center">
+        <Grid container justifyContent="space-between" alignItems="center">
           <Grid item><Typography variant="h5">{resourceType}/{resourceName}</Typography></Grid>
           <Grid item>
-            <Grid container spacing={8}>
-              { showNoTrafficMsg ? <Grid item><SimpleChip label="no traffic" type="warning" /></Grid> : null }
+            <Grid container spacing={1}>
+              {showNoTrafficMsg ? <Grid item><SimpleChip label={<Trans>columnTitleNoTraffic</Trans>} type="warning" /></Grid> : null}
               <Grid item>
-                { resourceIsMeshed ?
-                  <SimpleChip label="meshed" type="good" /> :
-                  <SimpleChip label="unmeshed" type="bad" />
+                {resourceIsMeshed ?
+                  <SimpleChip label={<Trans>columnTitleMeshed</Trans>} type="good" /> :
+                  <SimpleChip label={<Trans>columnTitleUnmeshed</Trans>} type="bad" />
                 }
               </Grid>
             </Grid>
@@ -269,58 +381,61 @@ export class ResourceDetailBase extends React.Component {
 
         {
           resourceIsMeshed ? null :
-          <React.Fragment>
-            <AddResources
-              resourceName={resourceName}
-              resourceType={resourceType} />
-          </React.Fragment>
+          <AddResources
+            resourceName={resourceName}
+            resourceType={resourceType} />
         }
 
         <Octopus
           resource={resourceMetrics[0]}
-          neighbors={{ upstream: upstreamMetrics, downstream: downstreamMetrics }}
+          neighbors={{ upstream: upstreamDisplayMetrics, downstream: downstreamDisplayMetrics }}
           unmeshedSources={Object.values(unmeshedSources)}
           api={this.api} />
 
-        <TopRoutesTabs
+        {isTcpOnly ? null : <TopRoutesTabs
           query={query}
-          pathPrefix={this.props.pathPrefix}
+          pathPrefix={pathPrefix}
           updateUnmeshedSources={this.updateUnmeshedSources}
           disableTop={!resourceIsMeshed} />
-
-        { _isEmpty(upstreams) ? null : (
-          <React.Fragment>
-            <Typography variant="h5">Inbound</Typography>
-            <MetricsTable
-              resource="multi_resource"
-              metrics={upstreamMetrics} />
-          </React.Fragment>
-          )
         }
 
-        { _isEmpty(this.state.downstreamMetrics) ? null : (
-          <React.Fragment>
-            <Typography variant="h5">Outbound</Typography>
-            <MetricsTable
-              resource="multi_resource"
-              metrics={downstreamMetrics} />
-          </React.Fragment>
-          )
+        {_isEmpty(upstreams) ? null :
+        <MetricsTable
+          resource="multi_resource"
+          title={<Trans>tableTitleInbound</Trans>}
+          metrics={upstreamDisplayMetrics} />
+        }
+
+        {_isEmpty(downstreamDisplayMetrics) ? null :
+        <MetricsTable
+          resource="multi_resource"
+          title={<Trans>tableTitleOutbound</Trans>}
+          metrics={downstreamDisplayMetrics} />
         }
 
         {
-          this.state.resource.type === "pod" ? null : (
-            <React.Fragment>
-              <Typography variant="h5">Pods</Typography>
-              <MetricsTable
-                resource="pod"
-                metrics={this.state.podMetrics} />
-            </React.Fragment>
-          )
+          resourceType === 'pod' || isTcpOnly ? null :
+          <MetricsTable
+            resource="pod"
+            title={<Trans>tableTitlePods</Trans>}
+            metrics={podMetrics} />
         }
+
+        <MetricsTable
+          resource="pod"
+          title={<Trans>tableTitleTCP</Trans>}
+          isTcpTable
+          metrics={podMetrics} />
+
+        <EdgesTable
+          api={this.api}
+          namespace={namespace}
+          type={resourceType}
+          edges={edges} />
+
       </div>
     );
-  }
+  };
 
   render() {
     return (
@@ -334,4 +449,15 @@ export class ResourceDetailBase extends React.Component {
   }
 }
 
-export default withContext(ResourceDetailBase);
+ResourceDetailBase.propTypes = {
+  api: PropTypes.shape({
+    PrefixedLink: PropTypes.func.isRequired,
+  }).isRequired,
+  isPageVisible: PropTypes.bool.isRequired,
+  match: PropTypes.shape({
+    url: PropTypes.string.isRequired,
+  }).isRequired,
+  pathPrefix: PropTypes.string.isRequired,
+};
+
+export default withPageVisibility(withContext(ResourceDetailBase));

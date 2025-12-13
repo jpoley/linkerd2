@@ -1,43 +1,48 @@
 import AppBar from '@material-ui/core/AppBar';
-import ConfigureProfilesMsg from './ConfigureProfilesMsg.jsx';
 import Paper from '@material-ui/core/Paper';
 import PropTypes from 'prop-types';
-import QueryToCliCmd from './QueryToCliCmd.jsx';
 import React from 'react';
 import Tab from '@material-ui/core/Tab';
 import Tabs from '@material-ui/core/Tabs';
-import TopModule from './TopModule.jsx';
-import TopRoutesModule from './TopRoutesModule.jsx';
+import { Trans } from '@lingui/macro';
 import _isEmpty from 'lodash/isEmpty';
 import _noop from 'lodash/noop';
 import { withStyles } from '@material-ui/core/styles';
+import TopRoutesModule from './TopRoutesModule.jsx';
+import TopModule from './TopModule.jsx';
+import TapEnabledWarning from './TapEnabledWarning.jsx';
+import QueryToCliCmd from './QueryToCliCmd.jsx';
+import ConfigureProfilesMsg from './ConfigureProfilesMsg.jsx';
 
 const styles = theme => ({
   root: {
     flexGrow: 1,
     backgroundColor: theme.palette.background.paper,
-    marginBottom: theme.spacing.unit * 3,
+    marginBottom: theme.spacing(3),
   },
 });
 
 class TopRoutesTabs extends React.Component {
-  state = {
-    value: 0,
-  };
+  constructor(props) {
+    super(props);
+    this.state = {
+      value: 0,
+    };
+  }
 
-  handleChange = (_event, value) => {
+  handleChange = (_, value) => {
     this.setState({ value });
   };
 
   renderTopComponent() {
-    let { disableTop, query, pathPrefix, updateUnmeshedSources } = this.props;
+    const { disableTop, query, pathPrefix, updateUnmeshedSources } = this.props;
     if (disableTop) {
       return null;
     }
 
-    let topQuery = {
-      resource: query.resourceType + "/" + query.resourceName,
-      namespace: query.namespace
+    const topQuery = {
+      resource: `${query.resourceType}/${query.resourceName}`,
+      namespace: query.namespace,
     };
 
     return (
@@ -45,9 +50,12 @@ class TopRoutesTabs extends React.Component {
         <TopModule
           pathPrefix={pathPrefix}
           query={topQuery}
-          startTap={true}
+          startTap
           updateUnmeshedSources={updateUnmeshedSources}
-          maxRowsToDisplay={10} />
+          maxRowsToDisplay={10}
+          tapEnabledWarningComponent={<TapEnabledWarning
+            resource={topQuery.resource}
+            namespace={topQuery.namespace} />} />
         <QueryToCliCmd cmdName="top" query={topQuery} resource={topQuery.resource} />
       </React.Fragment>
     );
@@ -60,12 +68,12 @@ class TopRoutesTabs extends React.Component {
       return <ConfigureProfilesMsg />;
     }
 
-    let routesQuery = {
+    const routesQuery = {
       resource_name: query.resourceName,
       resource_type: query.resourceType,
-      namespace: query.namespace
+      namespace: query.namespace,
     };
-    let resource = query.resourceType + "/" + query.resourceName;
+    const resource = `${query.resourceType}/${query.resourceName}`;
 
     return (
       <React.Fragment>
@@ -80,7 +88,7 @@ class TopRoutesTabs extends React.Component {
     const { value } = this.state;
 
     return (
-      <Paper className={classes.root}>
+      <Paper className={classes.root} elevation={3}>
         <AppBar position="static" className={classes.root}>
 
           <Tabs
@@ -88,8 +96,8 @@ class TopRoutesTabs extends React.Component {
             onChange={this.handleChange}
             indicatorColor="primary"
             textColor="primary">
-            <Tab label="Live Calls" />
-            <Tab label="Route Metrics" />
+            <Tab label={<Trans>tabLiveCalls</Trans>} />
+            <Tab label={<Trans>tabRouteMetrics</Trans>} />
           </Tabs>
         </AppBar>
         {value === 0 && this.renderTopComponent()}
@@ -99,19 +107,24 @@ class TopRoutesTabs extends React.Component {
   }
 }
 
-TopRoutesTabs.propTypes = {
-  classes: PropTypes.shape({}).isRequired,
-  disableTop: PropTypes.bool,
-  pathPrefix: PropTypes.string.isRequired,
-  query: PropTypes.shape({}),
-  theme: PropTypes.shape({}).isRequired,
-  updateUnmeshedSources: PropTypes.func
-};
-
 TopRoutesTabs.defaultProps = {
   disableTop: false,
   query: {},
-  updateUnmeshedSources: _noop
+  updateUnmeshedSources: _noop,
+};
+
+export const topRoutesQueryPropType = PropTypes.shape({
+  namespace: PropTypes.string,
+  resourceType: PropTypes.string,
+  resourceName: PropTypes.string,
+});
+
+TopRoutesTabs.propTypes = {
+  disableTop: PropTypes.bool,
+  pathPrefix: PropTypes.string.isRequired,
+  query: topRoutesQueryPropType,
+  theme: PropTypes.shape({}).isRequired,
+  updateUnmeshedSources: PropTypes.func,
 };
 
 export default withStyles(styles, { withTheme: true })(TopRoutesTabs);

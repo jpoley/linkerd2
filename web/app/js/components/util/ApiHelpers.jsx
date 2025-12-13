@@ -17,8 +17,8 @@ const checkFetchOk = resp => {
     throw {
       status: resp.status,
       url: resp.url,
-      statusText:resp.statusText,
-      error: error.error
+      statusText: resp.statusText,
+      error: error.error,
     };
   });
 };
@@ -29,10 +29,11 @@ const makeCancelable = (promise, onSuccess) => {
   let hasCanceled_ = false;
 
   const wrappedPromise = new Promise((resolve, reject) => {
-    return promise.then(
+    promise.then(
       result => hasCanceled_ ? reject({ isCanceled: true }) : resolve(result),
-      error => hasCanceled_ ? reject({ isCanceled: true }) : reject(error)
-    );
+      error => hasCanceled_ ? reject({ isCanceled: true }) : reject(error),
+    )
+      .catch(error => { reject(error); });
   })
     .then(checkFetchOk)
     .then(onSuccess);
@@ -44,7 +45,7 @@ const makeCancelable = (promise, onSuccess) => {
     },
     status: () => {
       return hasCanceled_;
-    }
+    },
   };
 };
 
@@ -52,62 +53,52 @@ export const apiErrorPropType = PropTypes.shape({
   status: PropTypes.number,
   url: PropTypes.string,
   statusText: PropTypes.string,
-  error: PropTypes.string
+  error: PropTypes.string,
 });
 
 const ApiHelpers = (pathPrefix, defaultMetricsWindow = '1m') => {
   let metricsWindow = defaultMetricsWindow;
-  const podsPath = `/api/pods`;
-  const servicesPath = `/api/services`;
+  const podsPath = '/api/pods';
+  const servicesPath = '/api/services';
+  const edgesPath = '/api/edges';
+  const gatewaysPath = '/api/gateways';
+  const l5dExtensionsPath = '/api/extensions';
 
   const validMetricsWindows = {
-    "10s": "10 minutes",
-    "1m": "1 minute",
-    "10m": "10 minutes",
-    "1h": "1 hour"
+    '10s': '10 seconds',
+    '1m': '1 minute',
+    '10m': '10 minutes',
+    '1h': '1 hour',
   };
 
   // for getting json api results
   const apiFetch = path => {
+    let path_ = path;
     if (!_isEmpty(pathPrefix)) {
-      path = `${pathPrefix}${path}`;
+      path_ = `${pathPrefix}${path_}`;
     }
 
-    return makeCancelable(fetch(path), r => r.json());
+    return makeCancelable(fetch(path_), r => r.json());
+  };
+
+  // for getting yaml api results
+  const apiFetchYAML = path => {
+    let path_ = path;
+    if (!_isEmpty(pathPrefix)) {
+      path_ = `${pathPrefix}${path_}`;
+    }
+
+    return makeCancelable(fetch(path_), r => r.text());
   };
 
   // for getting non-json results
   const prefixedUrl = path => {
+    let path_ = path;
     if (!_isEmpty(pathPrefix)) {
-      path = `${pathPrefix}${path}`;
+      path_ = `${pathPrefix}${path_}`;
     }
 
-    return path;
-  };
-
-  const fetchMetrics = path => {
-    if (path.indexOf("window") === -1) {
-      if (path.indexOf("?") === -1) {
-        path = `${path}?window=${getMetricsWindow()}`;
-      } else {
-        path = `${path}&window=${getMetricsWindow()}`;
-      }
-    }
-    return apiFetch(path);
-  };
-
-  const fetchPods = namespace => {
-    if (!_isNil(namespace)) {
-      return apiFetch(podsPath + "?namespace=" + namespace);
-    }
-    return apiFetch(podsPath);
-  };
-
-  const fetchServices = namespace => {
-    if (!_isNil(namespace)) {
-      return apiFetch(servicesPath + "?namespace=" + namespace);
-    }
-    return apiFetch(servicesPath);
+    return path_;
   };
 
   const getMetricsWindow = () => metricsWindow;
@@ -118,10 +109,83 @@ const ApiHelpers = (pathPrefix, defaultMetricsWindow = '1m') => {
     metricsWindow = window;
   };
 
-  const urlsForResource = (type, namespace) => {
+  const fetchMetrics = path => {
+    let path_ = path;
+    if (path_.indexOf('window') === -1) {
+      if (path_.indexOf('?') === -1) {
+        path_ = `${path_}?window=${getMetricsWindow()}`;
+      } else {
+        path_ = `${path_}&window=${getMetricsWindow()}`;
+      }
+    }
+    return apiFetch(path_);
+  };
+
+  const fetchPods = namespace => {
+    if (!_isNil(namespace)) {
+      return apiFetch(`${podsPath}?namespace=${namespace}`);
+    }
+    return apiFetch(podsPath);
+  };
+
+  const fetchServices = namespace => {
+    if (!_isNil(namespace)) {
+      return apiFetch(`${servicesPath}?namespace=${namespace}`);
+    }
+    return apiFetch(servicesPath);
+  };
+
+  const fetchEdges = (namespace, resourceType) => {
+    return apiFetch(`${edgesPath}?resource_type=${resourceType}&namespace=${namespace}`);
+  };
+
+  const fetchGateways = () => {
+    return apiFetch(gatewaysPath);
+  };
+
+  const fetchCheck = () => {
+    return apiFetch('/api/check');
+  };
+
+  const fetchExtension = name => {
+    let extensionPath = l5dExtensionsPath;
+    if (name) {
+      extensionPath += `?extension_name=${name}`;
+    }
+    return apiFetch(extensionPath);
+  };
+
+  const fetchResourceDefinition = (namespace, resourceType, resourceName) => {
+    return apiFetchYAML(`/api/resource-definition?namespace=${namespace}&resource_type=${resourceType}&resource_name=${resourceName}`);
+  };
+
+  const urlsForResource = (type, namespace, includeTcp) => {
     // Traffic Performance Summary. This retrieves stats for the given resource.
-    let baseUrl = '/api/tps-reports?resource_type=' + type;
-    return !namespace ? baseUrl + '&all_namespaces=true' : baseUrl + '&namespace=' + namespace;
+    let resourceUrl = `/api/tps-reports?resource_type=${type}`;
+
+    if (_isEmpty(namespace) || namespace === '_all') {
+      resourceUrl += '&all_namespaces=true';
+    } else {
+      resourceUrl += `&namespace=${namespace}`;
+    }
+    if (includeTcp) {
+      resourceUrl += '&tcp_stats=true';
+    }
+
+    return resourceUrl;
+  };
+
+  const urlsForResourceNoStats = (type, namespace) => {
+    // Traffic Performance Summary. This retrieves (non-Prometheus) stats for the given resource.
+    let resourceUrl = `/api/tps-reports?skip_stats=true&resource_type=${type}`;
+
+    if (_isEmpty(namespace) || namespace === '_all') {
+      resourceUrl += '&all_namespaces=true';
+    } else {
+      resourceUrl += `&namespace=${namespace}`;
+    }
+
+    return resourceUrl;
   };
 
   // maintain a list of a component's requests,
@@ -139,46 +203,44 @@ const ApiHelpers = (pathPrefix, defaultMetricsWindow = '1m') => {
     });
   };
 
-  // prefix all links in the app with `pathPrefix`
-  class PrefixedLink extends React.Component {
-    static defaultProps = {
-      targetBlank: false,
-    }
-
-    static propTypes = {
-      children: PropTypes.node.isRequired,
-      targetBlank: PropTypes.bool,
-      to: PropTypes.string.isRequired,
-    }
-
-    render() {
-      let url = prefixLink(this.props.to);
-
-      return (
-        <Link
-          to={url}
-          {...(this.props.targetBlank ? {target:'_blank'} : {})}>
-          {this.props.children}
-        </Link>
-      );
-    }
-  }
-
   const prefixLink = to => `${pathPrefix}${to}`;
 
+  // prefix all links in the app with `pathPrefix`
+  const PrefixedLink = function PrefixedLink({ to, targetBlank, children }) {
+    const url = prefixLink(to);
+
+    return (
+      <Link
+        to={url}
+        {...(targetBlank ? { target: '_blank' } : {})}>
+        {children}
+      </Link>
+    );
+  };
+
+  PrefixedLink.propTypes = {
+    children: PropTypes.node.isRequired,
+    targetBlank: PropTypes.bool,
+    to: PropTypes.string.isRequired,
+  };
+
+  PrefixedLink.defaultProps = {
+    targetBlank: false,
+  };
+
   const generateResourceURL = r => {
-    if (r.type === "namespace") {
-      return "/namespaces/" + (r.namespace || r.name);
+    if (r.type === 'namespace') {
+      return `/namespaces/${r.namespace || r.name}`;
     }
 
-    return "/namespaces/" + r.namespace + "/" + r.type + "s/" + r.name;
+    return `/namespaces/${r.namespace}/${r.type}s/${r.name}`;
   };
 
   // a prefixed link to a Resource Detail page
-  const ResourceLink = ({resource, linkText}) => {
+  const ResourceLink = function({ resource, linkText }) {
     return (
       <PrefixedLink to={generateResourceURL(resource)}>
-        { linkText || resource.type + "/" + resource.name}
+        {linkText || `${resource.type}/${resource.name}`}
       </PrefixedLink>
     );
   };
@@ -188,11 +250,11 @@ const ApiHelpers = (pathPrefix, defaultMetricsWindow = '1m') => {
       name: PropTypes.string,
       namespace: PropTypes.string,
       type: PropTypes.string,
-    })
+    }),
   };
   ResourceLink.defaultProps = {
     resource: {},
-    linkText: ""
+    linkText: '',
   };
 
   return {
@@ -201,11 +263,17 @@ const ApiHelpers = (pathPrefix, defaultMetricsWindow = '1m') => {
     fetchMetrics,
     fetchPods,
     fetchServices,
+    fetchEdges,
+    fetchGateways,
+    fetchExtension,
+    fetchCheck,
+    fetchResourceDefinition,
     getMetricsWindow,
     setMetricsWindow,
     getValidMetricsWindows: () => Object.keys(validMetricsWindows),
     getMetricsWindowDisplayText,
     urlsForResource,
+    urlsForResourceNoStats,
     PrefixedLink,
     prefixLink,
     ResourceLink,
@@ -214,7 +282,7 @@ const ApiHelpers = (pathPrefix, defaultMetricsWindow = '1m') => {
     generateResourceURL,
     cancelCurrentRequests,
     // DO NOT USE makeCancelable, use fetch, this is only exposed for testing
-    makeCancelable
+    makeCancelable,
   };
 };
 

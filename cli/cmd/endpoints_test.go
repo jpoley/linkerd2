@@ -3,67 +3,139 @@ package cmd
 import (
 	"testing"
 
-	"github.com/linkerd/linkerd2/controller/api/public"
+	pb "github.com/linkerd/linkerd2-proxy-api/go/destination"
+	"github.com/linkerd/linkerd2/controller/api/util"
 )
 
 type endpointsExp struct {
-	options    *endpointsOptions
-	identities []string
-	file       string
+	options     *endpointsOptions
+	authorities []string
+	endpoints   []util.AuthorityEndpoints
+	file        string
 }
 
 func TestEndpoints(t *testing.T) {
 	options := newEndpointsOptions()
-	options.namespace = "emojivoto"
-	t.Run("Returns endpoints", func(t *testing.T) {
+
+	t.Run("Returns endpoints same namespace", func(t *testing.T) {
 		testEndpointsCall(endpointsExp{
-			options:    options,
-			identities: []string{"emoji-svc.emojivoto", "voting-svc.emojivoto", "authors.books"},
-			file:       "endpoints_one_output.golden",
+			options:     options,
+			authorities: []string{"emoji-svc.emojivoto.svc.cluster.local:8080", "voting-svc.emojivoto.svc.cluster.local:8080"},
+			endpoints: []util.AuthorityEndpoints{
+				{
+					Namespace: "emojivoto",
+					ServiceID: "emoji-svc",
+					Pods: []util.PodDetails{
+						{
+							Name: "emoji-6bf9f47bd5-jjcrl",
+							IP:   16909060,
+							Port: 8080,
+						},
+					},
+				},
+				{
+					Namespace: "emojivoto",
+					ServiceID: "voting-svc",
+					Pods: []util.PodDetails{
+						{
+							Name: "voting-7bf9f47bd5-jjdrl",
+							IP:   84281096,
+							Port: 8080,
+						},
+					},
+				},
+			},
+			file: "endpoints_one_output.golden",
 		}, t)
 	})
 
-	options.outputFormat = "json"
-	t.Run("Returns endpoints (json)", func(t *testing.T) {
+	t.Run("Returns endpoints different namespace", func(t *testing.T) {
 		testEndpointsCall(endpointsExp{
-			options:    options,
-			identities: []string{"emoji-svc.emojivoto", "voting-svc.emojivoto", "authors.books"},
-			file:       "endpoints_one_output_json.golden",
+			options:     options,
+			authorities: []string{"emoji-svc.emojivoto.svc.cluster.local:8080", "voting-svc.emojivoto2.svc.cluster.local:8080"},
+			endpoints: []util.AuthorityEndpoints{
+				{
+					Namespace: "emojivoto",
+					ServiceID: "emoji-svc",
+					Pods: []util.PodDetails{
+						{
+							Name: "emoji-6bf9f47bd5-jjcrl",
+							IP:   16909060,
+							Port: 8080,
+						},
+					},
+				},
+				{
+					Namespace: "emojivoto2",
+					ServiceID: "voting-svc",
+					Pods: []util.PodDetails{
+						{
+							Name: "voting-7bf9f47bd5-jjdrl",
+							IP:   84281096,
+							Port: 8080,
+						},
+					},
+				},
+			},
+			file: "endpoints_two_outputs.golden",
 		}, t)
 	})
 
-	options = newEndpointsOptions()
-	t.Run("Returns all namespace endpoints", func(t *testing.T) {
+	options.outputFormat = jsonOutput
+	t.Run("Returns endpoints same namespace (json)", func(t *testing.T) {
 		testEndpointsCall(endpointsExp{
-			options:    options,
-			identities: []string{"emoji-svc.emojivoto", "voting-svc.emojivoto", "authors.books"},
-			file:       "endpoints_all_output.golden",
-		}, t)
-	})
-
-	options.outputFormat = "json"
-	t.Run("Returns all namespace endpoints (json)", func(t *testing.T) {
-		testEndpointsCall(endpointsExp{
-			options:    options,
-			identities: []string{"emoji-svc.emojivoto", "voting-svc.emojivoto", "authors.books"},
-			file:       "endpoints_all_output_json.golden",
+			options:     options,
+			authorities: []string{"emoji-svc.emojivoto.svc.cluster.local:8080", "voting-svc.emojivoto.svc.cluster.local:8080"},
+			endpoints: []util.AuthorityEndpoints{
+				{
+					Namespace: "emojivoto",
+					ServiceID: "emoji-svc",
+					Pods: []util.PodDetails{
+						{
+							Name: "emoji-6bf9f47bd5-jjcrl",
+							IP:   16909060,
+							Port: 8080,
+						},
+					},
+				},
+				{
+					Namespace: "emojivoto",
+					ServiceID: "voting-svc",
+					Pods: []util.PodDetails{
+						{
+							Name: "voting-7bf9f47bd5-jjdrl",
+							IP:   84281096,
+							Port: 8080,
+						},
+					},
+				},
+			},
+			file: "endpoints_one_output_json.golden",
 		}, t)
 	})
 }
 
 func testEndpointsCall(exp endpointsExp, t *testing.T) {
-	mockClient := &public.MockAPIClient{}
+	t.Helper()
 
-	response := public.GenEndpointsResponse(exp.identities)
+	updates := make([]pb.Update, 0)
+	for _, endpoint := range exp.endpoints {
+		addrSet := util.BuildAddrSet(endpoint)
+		updates = append(updates, pb.Update{Update: &pb.Update_Add{Add: addrSet}})
+	}
 
-	mockClient.EndpointsResponseToReturn = &response
+	mockClient := &util.MockAPIClient{
+		DestinationGetClientToReturn: &util.MockDestinationGetClient{
+			UpdatesToReturn: updates,
+		},
+	}
 
-	endpoints, err := requestEndpointsFromAPI(mockClient)
+	endpoints, err := requestEndpointsFromAPI(mockClient, "", exp.authorities)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
 	output := renderEndpoints(endpoints, exp.options)
 
-	diffCompareFile(t, output, exp.file)
+	testDataDiffer.DiffTestdata(t, exp.file, output)
 }

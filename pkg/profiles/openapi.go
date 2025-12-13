@@ -3,54 +3,55 @@ package profiles
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
-	"path"
-	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/go-openapi/spec"
-	sp "github.com/linkerd/linkerd2/controller/gen/apis/serviceprofile/v1alpha1"
-	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	sp "github.com/linkerd/linkerd2/controller/gen/apis/serviceprofile/v1alpha2"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
 )
 
-var pathParamRegex = regexp.MustCompile(`\\{[^\}]*\\}`)
+const (
+	xLinkerdRetryable = "x-linkerd-retryable"
+	xLinkerdTimeout   = "x-linkerd-timeout"
+)
 
 // RenderOpenAPI reads an OpenAPI spec file and renders the corresponding
 // ServiceProfile to a buffer, given a namespace, service, and control plane
 // namespace.
-func RenderOpenAPI(fileName, namespace, name string, w io.Writer) error {
+func RenderOpenAPI(fileName, namespace, name, clusterDomain string) (*sp.ServiceProfile, error) {
 
 	input, err := readFile(fileName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	bytes, err := ioutil.ReadAll(input)
+	bytes, err := io.ReadAll(input)
 	if err != nil {
-		return fmt.Errorf("Error reading file: %s", err)
+		return nil, fmt.Errorf("Error reading file: %w", err)
 	}
 	json, err := yaml.YAMLToJSON(bytes)
 	if err != nil {
-		return fmt.Errorf("Error parsing yaml: %s", err)
+		return nil, fmt.Errorf("Error parsing yaml: %w", err)
 	}
 
 	swagger := spec.Swagger{}
 	err = swagger.UnmarshalJSON(json)
 	if err != nil {
-		return fmt.Errorf("Error parsing OpenAPI spec: %s", err)
+		return nil, fmt.Errorf("Error parsing OpenAPI spec: %w", err)
 	}
 
-	profile := swaggerToServiceProfile(swagger, namespace, name)
+	profile := swaggerToServiceProfile(swagger, namespace, name, clusterDomain)
 
-	return writeProfile(profile, w)
+	return &profile, nil
 }
 
-func swaggerToServiceProfile(swagger spec.Swagger, namespace, name string) sp.ServiceProfile {
+func swaggerToServiceProfile(swagger spec.Swagger, namespace, name, clusterDomain string) sp.ServiceProfile {
 	profile := sp.ServiceProfile{
-		ObjectMeta: meta_v1.ObjectMeta{
-			Name:      fmt.Sprintf("%s.%s.svc.cluster.local", name, namespace),
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s.%s.svc.%s", name, namespace, clusterDomain),
 			Namespace: namespace,
 		},
 		TypeMeta: ServiceProfileMeta,
@@ -66,36 +67,37 @@ func swaggerToServiceProfile(swagger spec.Swagger, namespace, name string) sp.Se
 		sort.Strings(paths)
 	}
 
+	base := strings.TrimRight(swagger.BasePath, "/")
 	for _, relPath := range paths {
 		item := swagger.Paths.Paths[relPath]
-		path := path.Join(swagger.BasePath, relPath)
-		pathRegex := pathToRegex(path)
+		path := base + "/" + strings.TrimLeft(relPath, "/")
+		pathRegex := PathToRegex(path)
 		if item.Delete != nil {
-			spec := mkRouteSpec(path, pathRegex, http.MethodDelete, item.Delete.Responses)
+			spec := MkRouteSpec(path, pathRegex, http.MethodDelete, item.Delete)
 			routes = append(routes, spec)
 		}
 		if item.Get != nil {
-			spec := mkRouteSpec(path, pathRegex, http.MethodGet, item.Get.Responses)
+			spec := MkRouteSpec(path, pathRegex, http.MethodGet, item.Get)
 			routes = append(routes, spec)
 		}
 		if item.Head != nil {
-			spec := mkRouteSpec(path, pathRegex, http.MethodHead, item.Head.Responses)
+			spec := MkRouteSpec(path, pathRegex, http.MethodHead, item.Head)
 			routes = append(routes, spec)
 		}
 		if item.Options != nil {
-			spec := mkRouteSpec(path, pathRegex, http.MethodOptions, item.Options.Responses)
+			spec := MkRouteSpec(path, pathRegex, http.MethodOptions, item.Options)
 			routes = append(routes, spec)
 		}
 		if item.Patch != nil {
-			spec := mkRouteSpec(path, pathRegex, http.MethodPatch, item.Patch.Responses)
+			spec := MkRouteSpec(path, pathRegex, http.MethodPatch, item.Patch)
 			routes = append(routes, spec)
 		}
 		if item.Post != nil {
-			spec := mkRouteSpec(path, pathRegex, http.MethodPost, item.Post.Responses)
+			spec := MkRouteSpec(path, pathRegex, http.MethodPost, item.Post)
 			routes = append(routes, spec)
 		}
 		if item.Put != nil {
-			spec := mkRouteSpec(path, pathRegex, http.MethodPut, item.Put.Responses)
+			spec := MkRouteSpec(path, pathRegex, http.MethodPut, item.Put)
 			routes = append(routes, spec)
 		}
 	}
@@ -104,17 +106,23 @@ func swaggerToServiceProfile(swagger spec.Swagger, namespace, name string) sp.Se
 	return profile
 }
 
-func mkRouteSpec(path, pathRegex string, method string, responses *spec.Responses) *sp.RouteSpec {
+// MkRouteSpec makes a service profile route from an OpenAPI operation.
+func MkRouteSpec(path, pathRegex string, method string, operation *spec.Operation) *sp.RouteSpec {
+	retryable := false
+	timeout := ""
+	var responses *spec.Responses
+	if operation != nil {
+		retryable, _ = operation.VendorExtensible.Extensions.GetBool(xLinkerdRetryable)
+		timeout, _ = operation.VendorExtensible.Extensions.GetString(xLinkerdTimeout)
+		responses = operation.Responses
+	}
 	return &sp.RouteSpec{
 		Name:            fmt.Sprintf("%s %s", method, path),
 		Condition:       toReqMatch(pathRegex, method),
 		ResponseClasses: toRspClasses(responses),
+		IsRetryable:     retryable,
+		Timeout:         timeout,
 	}
-}
-
-func pathToRegex(path string) string {
-	escaped := regexp.QuoteMeta(path)
-	return pathParamRegex.ReplaceAllLiteralString(escaped, "[^/]*")
 }
 
 func toReqMatch(path string, method string) *sp.RequestMatch {

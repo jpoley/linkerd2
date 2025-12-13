@@ -5,46 +5,61 @@ import DialogActions from '@material-ui/core/DialogActions';
 import DialogContent from '@material-ui/core/DialogContent';
 import DialogContentText from '@material-ui/core/DialogContentText';
 import DialogTitle from '@material-ui/core/DialogTitle';
+import FormControl from '@material-ui/core/FormControl';
+import FormHelperText from '@material-ui/core/FormHelperText';
 import IconButton from '@material-ui/core/IconButton';
+import Input from '@material-ui/core/Input';
+import InputLabel from '@material-ui/core/InputLabel';
 import NoteAddIcon from '@material-ui/icons/NoteAdd';
 import PropTypes from 'prop-types';
 import React from 'react';
-import TextField from '@material-ui/core/TextField';
+import { Trans } from '@lingui/macro';
 import Typography from '@material-ui/core/Typography';
 import _isEmpty from 'lodash/isEmpty';
-import { withContext } from './util/AppContext.jsx';
 import { withStyles } from '@material-ui/core/styles';
+import { withContext } from './util/AppContext.jsx';
 
 const styles = theme => ({
   button: {
-    margin: theme.spacing.unit,
+    margin: theme.spacing(1),
   },
   margin: {
-    marginRight: theme.spacing.unit,
+    marginRight: theme.spacing(1),
   },
   container: {
     display: 'flex',
     flexWrap: 'wrap',
   },
   textField: {
-    marginLeft: theme.spacing.unit,
-    marginRight: theme.spacing.unit,
+    marginLeft: theme.spacing(1),
+    marginRight: theme.spacing(1),
+    marginTop: theme.spacing(2),
     width: 200,
   },
   root: {
-    marginTop: theme.spacing.unit * 3,
-    marginBottom: theme.spacing.unit * 3,
+    marginTop: theme.spacing(3),
+    marginBottom: theme.spacing(3),
   },
 });
+
+const dns1035ServiceFmt = '^[a-z]([-a-z0-9]*[a-z0-9])?$';
+const dns1123NamespaceFmt = '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$';
+const serviceNameRegexp = RegExp(dns1035ServiceFmt);
+const namespaceNameRegexp = RegExp(dns1123NamespaceFmt);
+
 class ConfigureProfilesMsg extends React.Component {
   constructor(props) {
     super(props);
     this.state = {
       open: false,
+      error: {
+        service: false,
+        namespace: false,
+      },
       query: {
-        service: "",
-        namespace: ""
-      }
+        service: '',
+        namespace: '',
+      },
     };
   }
 
@@ -53,23 +68,50 @@ class ConfigureProfilesMsg extends React.Component {
   };
 
   handleClose = () => {
-    this.setState({ open: false });
+    this.setState({
+      open: false,
+      error: {
+        service: false,
+        namespace: false,
+      },
+      query: {
+        service: '',
+        namespace: '',
+      },
+    });
   };
 
   handleChange = name => {
-    let state = this.state;
+    const state = this.state;
 
     return e => {
       state.query[name] = e.target.value;
+      state.error[name] = false;
       this.setState(state);
     };
-  }
+  };
+
+  validateFields = (type, name) => {
+    const { error } = this.state;
+
+    if (_isEmpty(name)) {
+      error[type] = false;
+    } else {
+      const match = type === 'service' ?
+        serviceNameRegexp.test(name) :
+        namespaceNameRegexp.test(name);
+
+      error[type] = !match;
+    }
+
+    this.setState({ error });
+  };
 
   renderDownloadProfileForm = () => {
     const { api, classes, showAsIcon } = this.props;
-    let { query } = this.state;
+    const { query, error, open, service, name } = this.state;
 
-    let downloadUrl = api.prefixedUrl(`/profiles/new?service=${query.service}&namespace=${query.namespace}`);
+    const downloadUrl = api.prefixedUrl(`/profiles/new?service=${query.service}&namespace=${query.namespace}`);
     let button;
 
     if (showAsIcon) {
@@ -89,67 +131,96 @@ class ConfigureProfilesMsg extends React.Component {
           variant="outlined"
           color="primary"
           size="small"
-          onClick={this.handleClickOpen}>Create Service Profile
+          onClick={this.handleClickOpen}>
+          <Trans>buttonCreateServiceProfile</Trans>
         </Button>
       );
     }
+
+    const disableDownloadButton = _isEmpty(query.service) || _isEmpty(query.namespace) ||
+      error.service || error.namespace;
+    const downloadButton = (
+      <Button
+        disabled={disableDownloadButton}
+        onClick={() => this.handleClose(downloadUrl)}
+        color="primary">
+        <Trans>buttonDownload</Trans>
+      </Button>
+    );
+
     return (
       <React.Fragment>
         {button}
-
         <Dialog
-          open={this.state.open}
+          open={open}
           onClose={this.handleClose}
           aria-labelledby="form-dialog-title">
-          <DialogTitle id="form-dialog-title">New service profile</DialogTitle>
+          <DialogTitle id="form-dialog-title">
+            <Trans>New service profile</Trans>
+          </DialogTitle>
           <DialogContent>
             <DialogContentText>
-              To create a service profile, download a profile and then apply it with `kubectl apply`.
+              <Trans>formCreateServiceProfileHelpText</Trans>
             </DialogContentText>
-            <TextField
-              id="service"
-              label="Service"
+            <FormControl
               className={classes.textField}
-              value={this.state.service}
-              onChange={this.handleChange('service')}
-              margin="normal" />
-            <TextField
-              id="namespace"
-              label="Namespace"
+              onBlur={() => this.validateFields('service', query.service)}
+              error={error.service}>
+              <InputLabel htmlFor="component-error">Service</InputLabel>
+              <Input
+                id="component-error"
+                value={service}
+                onChange={this.handleChange('service')}
+                aria-describedby="component-error-text" />
+              {error.service && (
+                <FormHelperText id="component-error-text">
+                  <Trans>formServiceNameErrorText</Trans>
+                </FormHelperText>
+              )}
+            </FormControl>
+            <FormControl
               className={classes.textField}
-              value={this.state.name}
-              onChange={this.handleChange('namespace')}
-              margin="normal" />
+              onBlur={() => this.validateFields('namespace', query.namespace)}
+              error={error.namespace}>
+              <InputLabel htmlFor="component-error">Namespace</InputLabel>
+              <Input
+                id="component-error"
+                value={name}
+                onChange={this.handleChange('namespace')}
+                aria-describedby="component-error-text" />
+              {error.namespace && (
+                <FormHelperText id="component-error-text">
+                  <Trans>formNamespaceErrorText</Trans>
+                </FormHelperText>
+              )}
+            </FormControl>
           </DialogContent>
-
           <DialogActions>
-            <Button onClick={this.handleClose} color="primary">Cancel</Button>
-            <a href={downloadUrl} style={{ textDecoration: 'none' }}>
-              <Button
-                disabled={_isEmpty(query.service) || _isEmpty(query.namespace)}
-                onClick={this.handleClose}
-                color="primary">Download
-              </Button>
-            </a>
+            <Button onClick={this.handleClose} color="primary">
+              <Trans>buttonCancel</Trans>
+            </Button>
+            {disableDownloadButton ?
+              downloadButton :
+              <a
+                href={downloadUrl}
+                style={{ textDecoration: 'none' }}>{downloadButton}
+              </a>
+            }
           </DialogActions>
         </Dialog>
       </React.Fragment>
     );
-  }
+  };
 
   render() {
     const { showAsIcon } = this.props;
-
-    if (this.props.singleNamespace === "true") {
-      return null;
-    } else if (showAsIcon) {
+    if (showAsIcon) {
       return this.renderDownloadProfileForm();
     } else {
       return (
         <CardContent>
           <Typography component="div">
-            No named route traffic found. This could be because the service is not receiving any traffic,
-            or because there is no service profile configured. Does the service have a service profile?
+            <Trans>formNoNamedRouteTrafficFound</Trans>
             {this.renderDownloadProfileForm()}
           </Typography>
         </CardContent>
@@ -162,13 +233,11 @@ ConfigureProfilesMsg.propTypes = {
   api: PropTypes.shape({
     prefixedUrl: PropTypes.func.isRequired,
   }).isRequired,
-  classes: PropTypes.shape({}).isRequired,
   showAsIcon: PropTypes.bool,
-  singleNamespace: PropTypes.string.isRequired,
 };
 
 ConfigureProfilesMsg.defaultProps = {
-  showAsIcon: false
+  showAsIcon: false,
 };
 
 export default withContext(withStyles(styles, { withTheme: true })(ConfigureProfilesMsg));

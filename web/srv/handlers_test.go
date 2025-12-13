@@ -3,32 +3,24 @@ package srv
 import (
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/go-test/deep"
 	"github.com/julienschmidt/httprouter"
-	"github.com/linkerd/linkerd2/controller/api/public"
-	"github.com/linkerd/linkerd2/controller/gen/apis/serviceprofile/v1alpha1"
-	pb "github.com/linkerd/linkerd2/controller/gen/public"
+	"github.com/linkerd/linkerd2/controller/gen/apis/serviceprofile/v1alpha2"
 	helpers "github.com/linkerd/linkerd2/pkg/profiles"
 	"sigs.k8s.io/yaml"
 )
 
-func TestHandleIndex(t *testing.T) {
-	mockAPIClient := &public.MockAPIClient{
-		VersionInfoToReturn: &pb.VersionInfo{
-			GoVersion:      "the best one",
-			BuildDate:      "never",
-			ReleaseVersion: "0.3.3",
-		},
-	}
+const releaseVersion = "0.3.3"
 
+func TestHandleIndex(t *testing.T) {
 	server := FakeServer()
 
 	handler := &handler{
-		render:    server.RenderTemplate,
-		apiClient: mockAPIClient,
+		render:  server.RenderTemplate,
+		version: releaseVersion,
 	}
 
 	recorder := httptest.NewRecorder()
@@ -43,17 +35,15 @@ func TestHandleIndex(t *testing.T) {
 	header := http.Header{
 		"Content-Type": []string{"text/html"},
 	}
-	if !reflect.DeepEqual(recorder.Header(), header) {
-		t.Errorf("Incorrect headers: %+v", recorder.Header())
-		t.Errorf("Expected:          %+v", header)
+	if diff := deep.Equal(recorder.Header(), header); diff != nil {
+		t.Errorf("Unexpected header: %v", diff)
 	}
 
 	actualBody := recorder.Body.String()
 
 	expectedSubstrings := []string{
 		"<div class=\"main\" id=\"main\"",
-		"data-release-version=\"0.3.3\"",
-		"data-go-version=\"the best one\"",
+		"data-release-version=\"" + releaseVersion + "\"",
 		"data-controller-namespace=\"\"",
 		"data-uuid=\"\"",
 	}
@@ -65,19 +55,12 @@ func TestHandleIndex(t *testing.T) {
 }
 
 func TestHandleConfigDownload(t *testing.T) {
-	mockAPIClient := &public.MockAPIClient{
-		VersionInfoToReturn: &pb.VersionInfo{
-			GoVersion:      "the best one",
-			BuildDate:      "never",
-			ReleaseVersion: "0.3.3",
-		},
-	}
 	server := FakeServer()
 
 	handler := &handler{
 		render:              server.RenderTemplate,
-		apiClient:           mockAPIClient,
 		controllerNamespace: "linkerd",
+		clusterDomain:       "mycluster.local",
 	}
 
 	recorder := httptest.NewRecorder()
@@ -95,21 +78,20 @@ func TestHandleConfigDownload(t *testing.T) {
 			"text/yaml",
 		},
 		"Content-Disposition": []string{
-			"attachment; filename='authors-profile.yml'",
+			"attachment; filename=authors-profile.yml",
 		},
 	}
-	if !reflect.DeepEqual(recorder.Header(), header) {
-		t.Errorf("Incorrect headers: %+v", recorder.Header())
-		t.Errorf("Expected:          %+v", header)
+	if diff := deep.Equal(recorder.Header(), header); diff != nil {
+		t.Errorf("Unexpected header: %v", diff)
 	}
 
-	var serviceProfile v1alpha1.ServiceProfile
+	var serviceProfile v1alpha2.ServiceProfile
 	err := yaml.Unmarshal(recorder.Body.Bytes(), &serviceProfile)
 	if err != nil {
 		t.Fatalf("Error parsing service profile: %v", err)
 	}
 
-	expectedServiceProfile := helpers.GenServiceProfile("authors", "booksns")
+	expectedServiceProfile := helpers.GenServiceProfile("authors", "booksns", "mycluster.local")
 
 	err = helpers.ServiceProfileYamlEquals(serviceProfile, expectedServiceProfile)
 	if err != nil {

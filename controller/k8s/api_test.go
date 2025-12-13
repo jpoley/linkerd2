@@ -1,284 +1,102 @@
 package k8s
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
-	"github.com/linkerd/linkerd2/pkg/k8s"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
+
+	"github.com/go-test/deep"
+	"github.com/linkerd/linkerd2/pkg/k8s"
+
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-func newAPI(resourceConfigs []string, extraConfigs ...string) (*API, []runtime.Object, error) {
+type resources struct {
+	results []string
+	misc    []string
+}
+
+// newMockAPI constructs a mock controller/k8s.API object for testing If
+// useInformer is true, it forces informer indexing, enabling informer lookups
+func newMockAPI(useInformer bool, res resources) (
+	*API,
+	*MetadataAPI,
+	[]runtime.Object,
+	error,
+) {
 	k8sConfigs := []string{}
 	k8sResults := []runtime.Object{}
 
-	for _, config := range resourceConfigs {
-		obj, err := toRuntimeObject(config)
+	for _, config := range res.results {
+		obj, err := k8s.ToRuntimeObject(config)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		k8sConfigs = append(k8sConfigs, config)
 		k8sResults = append(k8sResults, obj)
 	}
 
-	for _, config := range extraConfigs {
-		k8sConfigs = append(k8sConfigs, config)
-	}
+	k8sConfigs = append(k8sConfigs, res.misc...)
 
-	api, err := NewFakeAPI("", k8sConfigs...)
+	api, err := NewFakeAPI(k8sConfigs...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("NewFakeAPI returned an error: %s", err)
+		return nil, nil, nil, fmt.Errorf("NewFakeAPI returned an error: %w", err)
 	}
 
-	api.Sync()
+	metadataAPI, err := NewFakeMetadataAPI(k8sConfigs)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("NewFakeMetadataAPI returned an error: %w", err)
+	}
 
-	return api, k8sResults, nil
+	if useInformer {
+		api.Sync(nil)
+		metadataAPI.Sync(nil)
+	}
+
+	return api, metadataAPI, k8sResults, nil
 }
 
+// TestGetObjects tests both api.GetObjects() and
+// metadataAPI.GetByNamespaceFiltered()
 func TestGetObjects(t *testing.T) {
 
 	type getObjectsExpected struct {
-		err error
+		resources
 
-		// input
+		err       error
 		namespace string
 		resType   string
 		name      string
-
-		// these are used to seed the k8s client
-		k8sResResults []string // expected results from GetObjects
-		k8sResMisc    []string // additional k8s objects for seeding the k8s client
 	}
 
 	t.Run("Returns expected objects based on input", func(t *testing.T) {
 		expectations := []getObjectsExpected{
-			getObjectsExpected{
-				err:           status.Errorf(codes.Unimplemented, "unimplemented resource type: bar"),
-				namespace:     "foo",
-				resType:       "bar",
-				name:          "baz",
-				k8sResResults: []string{},
-				k8sResMisc:    []string{},
+			{
+				err:       status.Errorf(codes.Unimplemented, "unimplemented resource type: bar"),
+				namespace: "foo",
+				resType:   "bar",
+				name:      "baz",
+				resources: resources{
+					results: []string{},
+					misc:    []string{},
+				},
 			},
-			getObjectsExpected{
+			{
 				err:       nil,
 				namespace: "my-ns",
 				resType:   k8s.Pod,
 				name:      "my-pod",
-				k8sResResults: []string{`
-apiVersion: v1
-kind: Pod
-metadata:
-  name: my-pod
-  namespace: my-ns
-spec:
-  containers:
-  - name: my-pod
-status:
-  phase: Running`,
-				},
-				k8sResMisc: []string{},
-			},
-			getObjectsExpected{
-				err:           errors.New("pod \"my-pod\" not found"),
-				namespace:     "not-my-ns",
-				resType:       k8s.Pod,
-				name:          "my-pod",
-				k8sResResults: []string{},
-				k8sResMisc: []string{`
-apiVersion: v1
-kind: Pod
-metadata:
-  name: my-pod
-  namespace: my-ns`,
-				},
-			},
-			getObjectsExpected{
-				err:       nil,
-				namespace: "",
-				resType:   k8s.ReplicationController,
-				name:      "",
-				k8sResResults: []string{`
-apiVersion: v1
-kind: ReplicationController
-metadata:
-  name: my-rc
-  namespace: my-ns`,
-				},
-				k8sResMisc: []string{},
-			},
-			getObjectsExpected{
-				err:       nil,
-				namespace: "my-ns",
-				resType:   k8s.Deployment,
-				name:      "",
-				k8sResResults: []string{`
-apiVersion: apps/v1beta2
-kind: Deployment
-metadata:
-  name: my-deploy
-  namespace: my-ns`,
-				},
-				k8sResMisc: []string{`
-apiVersion: apps/v1beta2
-kind: Deployment
-metadata:
-  name: my-deploy
-  namespace: not-my-ns`,
-				},
-			},
-			getObjectsExpected{
-				err:       nil,
-				namespace: "",
-				resType:   k8s.DaemonSet,
-				name:      "",
-				k8sResResults: []string{`
-apiVersion: apps/v1
-kind: DaemonSet
-metadata:
-  name: my-deploy
-  namespace: my-ns`,
-				},
-			},
-			getObjectsExpected{
-				err:       nil,
-				namespace: "my-ns",
-				resType:   k8s.DaemonSet,
-				name:      "my-ds",
-				k8sResResults: []string{`
-apiVersion: apps/v1
-kind: DaemonSet
-metadata:
-  name: my-ds
-  namespace: my-ns`,
-				},
-				k8sResMisc: []string{`
-apiVersion: apps/v1
-kind: DaemonSet
-metadata:
-  name: my-ds
-  namespace: not-my-ns`,
-				},
-			},
-			getObjectsExpected{
-				err:       nil,
-				namespace: "",
-				resType:   k8s.StatefulSet,
-				name:      "",
-				k8sResResults: []string{`
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: my-deploy
-  namespace: my-ns`,
-				},
-			},
-			getObjectsExpected{
-				err:       nil,
-				namespace: "my-ns",
-				resType:   k8s.StatefulSet,
-				name:      "my-ss",
-				k8sResResults: []string{`
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: my-ss
-  namespace: my-ns`,
-				},
-				k8sResMisc: []string{`
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: my-ss
-  namespace: not-my-ns`,
-				},
-			},
-			getObjectsExpected{
-				err:       nil,
-				namespace: "",
-				resType:   k8s.Namespace,
-				name:      "",
-				k8sResResults: []string{`
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: my-ns`,
-				},
-				k8sResMisc: []string{},
-			},
-		}
-
-		for _, exp := range expectations {
-			api, k8sResults, err := newAPI(exp.k8sResResults, exp.k8sResMisc...)
-			if err != nil {
-				t.Fatalf("newAPI error: %s", err)
-			}
-
-			pods, err := api.GetObjects(exp.namespace, exp.resType, exp.name)
-			if err != nil || exp.err != nil {
-				if (err == nil && exp.err != nil) ||
-					(err != nil && exp.err == nil) ||
-					(err.Error() != exp.err.Error()) {
-					t.Fatalf("api.GetObjects() unexpected error, expected [%s] got: [%s]", exp.err, err)
-				}
-			} else {
-				if !reflect.DeepEqual(pods, k8sResults) {
-					t.Fatalf("Expected: %+v, Got: %+v", k8sResults, pods)
-				}
-			}
-		}
-	})
-
-	t.Run("In single-namespace mode", func(t *testing.T) {
-		t.Run("Returns only the configured namespace", func(t *testing.T) {
-
-			ns1 := `
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: namespace1`
-
-			ns2 := `
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: namespace2`
-
-			api, err := NewFakeAPI("namespace1", ns1, ns2)
-			if err != nil {
-				t.Fatalf("NewFakeAPI returned an error: %s", err)
-			}
-
-			namespaces, err := api.GetObjects("", k8s.Namespace, "")
-			if err != nil {
-				t.Fatalf("unexpected error: %s", err)
-			}
-
-			if len(namespaces) != 1 {
-				t.Fatalf("expected 1 namespace, got %d", len(namespaces))
-			}
-
-			if namespaces[0].(*apiv1.Namespace).Name != "namespace1" {
-				t.Fatalf("expected namespace1, got %v", namespaces[0])
-			}
-		})
-	})
-
-	t.Run("If objects are pods", func(t *testing.T) {
-		t.Run("Return running or pending pods", func(t *testing.T) {
-			expectations := []getObjectsExpected{
-				getObjectsExpected{
-					err:       nil,
-					namespace: "my-ns",
-					resType:   k8s.Pod,
-					name:      "my-pod",
-					k8sResResults: []string{`
+				resources: resources{
+					results: []string{`
 apiVersion: v1
 kind: Pod
 metadata:
@@ -290,13 +108,271 @@ spec:
 status:
   phase: Running`,
 					},
+					misc: []string{},
 				},
-				getObjectsExpected{
+			},
+			{
+				err:       errors.New("\"my-pod\" not found"),
+				namespace: "not-my-ns",
+				resType:   k8s.Pod,
+				name:      "my-pod",
+				resources: resources{
+					results: []string{},
+					misc: []string{`
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-pod
+  namespace: my-ns`,
+					},
+				},
+			},
+			{
+				err:       nil,
+				namespace: "",
+				resType:   k8s.ReplicationController,
+				name:      "",
+				resources: resources{
+					results: []string{`
+apiVersion: v1
+kind: ReplicationController
+metadata:
+  name: my-rc
+  namespace: my-ns`,
+					},
+					misc: []string{},
+				},
+			},
+			{
+				err:       nil,
+				namespace: "my-ns",
+				resType:   k8s.Deployment,
+				name:      "",
+				resources: resources{
+					results: []string{`
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-deploy
+  namespace: my-ns`,
+					},
+					misc: []string{`
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-deploy
+  namespace: not-my-ns`,
+					},
+				},
+			},
+			{
+				err:       nil,
+				namespace: "",
+				resType:   k8s.DaemonSet,
+				name:      "",
+				resources: resources{
+					results: []string{`
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: my-ds
+  namespace: my-ns`,
+					},
+				},
+			},
+			{
+				err:       nil,
+				namespace: "my-ns",
+				resType:   k8s.DaemonSet,
+				name:      "my-ds",
+				resources: resources{
+					results: []string{`
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: my-ds
+  namespace: my-ns`,
+					},
+					misc: []string{`
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: my-ds
+  namespace: not-my-ns`,
+					},
+				},
+			},
+			{
+				err:       nil,
+				namespace: "my-ns",
+				resType:   k8s.Job,
+				name:      "my-job",
+				resources: resources{
+					results: []string{`
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: my-job
+  namespace: my-ns`,
+					},
+					misc: []string{`
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: my-job
+  namespace: not-my-ns`,
+					},
+				},
+			},
+			{
+				err:       nil,
+				namespace: "my-ns",
+				resType:   k8s.CronJob,
+				name:      "my-cronjob",
+				resources: resources{
+					results: []string{`
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: my-cronjob
+  namespace: my-ns`,
+					},
+					misc: []string{`
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: my-cronjob
+  namespace: not-my-ns`,
+					},
+				},
+			},
+			{
+				err:       nil,
+				namespace: "",
+				resType:   k8s.StatefulSet,
+				name:      "",
+				resources: resources{
+					results: []string{`
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: my-ss
+  namespace: my-ns`,
+					},
+				},
+			},
+			{
+				err:       nil,
+				namespace: "my-ns",
+				resType:   k8s.StatefulSet,
+				name:      "my-ss",
+				resources: resources{
+					results: []string{`
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: my-ss
+  namespace: my-ns`,
+					},
+					misc: []string{`
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: my-ss
+  namespace: not-my-ns`,
+					},
+				},
+			},
+			{
+				err:       nil,
+				namespace: "",
+				resType:   k8s.Namespace,
+				name:      "",
+				resources: resources{
+					results: []string{`
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: my-ns`,
+					},
+					misc: []string{},
+				},
+			},
+		}
+
+		for _, exp := range expectations {
+			api, metadataAPI, k8sResults, err := newMockAPI(true, exp.resources)
+			if err != nil {
+				t.Fatalf("newMockAPI error: %s", err)
+			}
+
+			pods, err := api.GetObjects(exp.namespace, exp.resType, exp.name, labels.Everything())
+			if err != nil || exp.err != nil {
+				if unexpectedErrors(err, exp.err) {
+					t.Fatalf("api.GetObjects() unexpected error, expected [%s] got: [%s]", exp.err, err)
+				}
+			} else {
+				if diff := deep.Equal(pods, k8sResults); diff != nil {
+					t.Fatalf("Expected: %+v", diff)
+				}
+			}
+
+			var objMetas []*metav1.PartialObjectMetadata
+			res, err := GetAPIResource(exp.resType)
+			if err == nil {
+				objMetas, err = metadataAPI.GetByNamespaceFiltered(res, exp.namespace, exp.name, labels.Everything())
+			}
+			if err != nil || exp.err != nil {
+				if unexpectedErrors(err, exp.err) {
+					fmt.Printf("objMetas: %#v\n", objMetas)
+					t.Fatalf("metadataAPI.GetNamespaceFilteredCache() unexpected error, expected [%s] got: [%s]", exp.err, err)
+				}
+			} else {
+				expMetas := []*metav1.PartialObjectMetadata{}
+				for _, obj := range k8sResults {
+					objMeta, err := toPartialObjectMetadata(obj)
+					if err != nil {
+						t.Fatalf("error converting Object to PartialObjectMetadata: %s", err)
+					}
+					expMetas = append(expMetas, objMeta)
+				}
+				if diff := deep.Equal(objMetas, expMetas); diff != nil {
+					t.Fatalf("Expected: %+v", diff)
+				}
+			}
+		}
+	})
+
+	t.Run("If objects are pods", func(t *testing.T) {
+		t.Run("Return running or pending pods", func(t *testing.T) {
+			expectations := []getObjectsExpected{
+				{
 					err:       nil,
 					namespace: "my-ns",
 					resType:   k8s.Pod,
 					name:      "my-pod",
-					k8sResResults: []string{`
+					resources: resources{
+						results: []string{`
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-pod
+  namespace: my-ns
+spec:
+  containers:
+  - name: my-pod
+status:
+  phase: Running`,
+						},
+					},
+				},
+				{
+					err:       nil,
+					namespace: "my-ns",
+					resType:   k8s.Pod,
+					name:      "my-pod",
+					resources: resources{
+						results: []string{`
 apiVersion: v1
 kind: Pod
 metadata:
@@ -307,35 +383,37 @@ spec:
   - name: my-pod
 status:
   phase: Pending`,
+						},
 					},
 				},
 			}
 
 			for _, exp := range expectations {
-				api, k8sResults, err := newAPI(exp.k8sResResults)
+				api, _, k8sResults, err := newMockAPI(true, exp.resources)
 				if err != nil {
-					t.Fatalf("newAPI error: %s", err)
+					t.Fatalf("newMockAPI error: %s", err)
 				}
 
-				pods, err := api.GetObjects(exp.namespace, exp.resType, exp.name)
+				pods, err := api.GetObjects(exp.namespace, exp.resType, exp.name, labels.Everything())
 				if err != nil {
 					t.Fatalf("api.GetObjects() unexpected error %s", err)
 				}
 
-				if !reflect.DeepEqual(pods, k8sResults) {
-					t.Fatalf("Expected: %+v, Got: %+v", k8sResults, pods)
+				if diff := deep.Equal(pods, k8sResults); diff != nil {
+					t.Fatalf("%+v", diff)
 				}
 			}
 		})
 
 		t.Run("Don't return failed or succeeded pods", func(t *testing.T) {
 			expectations := []getObjectsExpected{
-				getObjectsExpected{
+				{
 					err:       nil,
 					namespace: "my-ns",
 					resType:   k8s.Pod,
 					name:      "my-pod",
-					k8sResResults: []string{`
+					resources: resources{
+						results: []string{`
 apiVersion: v1
 kind: Pod
 metadata:
@@ -346,14 +424,16 @@ spec:
   - name: my-pod
 status:
   phase: Succeeded`,
+						},
 					},
 				},
-				getObjectsExpected{
+				{
 					err:       nil,
 					namespace: "my-ns",
 					resType:   k8s.Pod,
 					name:      "my-pod",
-					k8sResResults: []string{`
+					resources: resources{
+						results: []string{`
 apiVersion: v1
 kind: Pod
 metadata:
@@ -364,17 +444,18 @@ spec:
   - name: my-pod
 status:
   phase: Failed`,
+						},
 					},
 				},
 			}
 
 			for _, exp := range expectations {
-				api, _, err := newAPI(exp.k8sResResults)
+				api, _, _, err := newMockAPI(true, exp.resources)
 				if err != nil {
-					t.Fatalf("newAPI error: %s", err)
+					t.Fatalf("newMockAPI error: %s", err)
 				}
 
-				pods, err := api.GetObjects(exp.namespace, exp.resType, exp.name)
+				pods, err := api.GetObjects(exp.namespace, exp.resType, exp.name, labels.Everything())
 				if err != nil {
 					t.Fatalf("api.GetObjects() unexpected error %s", err)
 				}
@@ -391,20 +472,18 @@ status:
 func TestGetPodsFor(t *testing.T) {
 
 	type getPodsForExpected struct {
-		err error
+		resources
 
-		// all 3 of these are used to seed the k8s client
-		k8sResInput   string   // object used as input to GetPodFor()
-		k8sResResults []string // expected results from GetPodsFor
-		k8sResMisc    []string // additional k8s objects for seeding the k8s client
+		err         error
+		k8sResInput string // object used as input to GetPodFor()
 	}
 
 	t.Run("Returns expected pods based on input", func(t *testing.T) {
 		expectations := []getPodsForExpected{
-			getPodsForExpected{
+			{
 				err: nil,
 				k8sResInput: `
-apiVersion: apps/v1beta2
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: emoji
@@ -413,8 +492,9 @@ spec:
   selector:
     matchLabels:
       app: emoji-svc`,
-				k8sResResults: []string{},
-				k8sResMisc: []string{`
+				resources: resources{
+					results: []string{},
+					misc: []string{`
 apiVersion: v1
 kind: Pod
 metadata:
@@ -422,12 +502,15 @@ metadata:
   namespace: emojivoto
   labels:
     app: emoji-svc
+  ownerReferences:
+  - apiVersion: apps/v1
 status:
   phase: Finished`,
+					},
 				},
 			},
 			// Retrieve pods associated to a ClusterIP service
-			getPodsForExpected{
+			{
 				err: nil,
 				k8sResInput: `
 apiVersion: v1
@@ -435,11 +518,13 @@ kind: Service
 metadata:
   name: emoji-svc
   namespace: emojivoto
+  uid: serviceUIDDoesNotMatter
 spec:
   type: ClusterIP
   selector:
     app: emoji-svc`,
-				k8sResResults: []string{`
+				resources: resources{
+					results: []string{`
 apiVersion: v1
 kind: Pod
 metadata:
@@ -447,13 +532,16 @@ metadata:
   namespace: emojivoto
   labels:
     app: emoji-svc
+  ownerReferences:
+  - apiVersion: apps/v1
 status:
   phase: Running`,
+					},
+					misc: []string{},
 				},
-				k8sResMisc: []string{},
 			},
 			// ExternalName services shouldn't return any pods
-			getPodsForExpected{
+			{
 				err: nil,
 				k8sResInput: `
 apiVersion: v1
@@ -464,8 +552,9 @@ metadata:
 spec:
   type: ExternalName
   externalName: someapi.example.com`,
-				k8sResResults: []string{},
-				k8sResMisc: []string{`
+				resources: resources{
+					results: []string{},
+					misc: []string{`
 apiVersion: v1
 kind: Pod
 metadata:
@@ -475,9 +564,53 @@ metadata:
     app: emoji-svc
 status:
   phase: Running`,
+					},
 				},
 			},
-			getPodsForExpected{
+			// Cronjob
+			{
+				err: nil,
+				k8sResInput: `
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: emoji
+  namespace: emojivoto
+  uid: cronjob`,
+				resources: resources{
+					results: []string{`
+apiVersion: v1
+kind: Pod
+metadata:
+  name: emojivoto-meshed
+  namespace: emojivoto
+  labels:
+    app: emoji-svc
+  ownerReferences:
+  - apiVersion: batch/v1
+    uid: job
+status:
+  phase: Running`,
+					},
+					misc: []string{`
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: emoji
+  namespace: emojivoto
+  uid: job
+  ownerReferences:
+  - apiVersion: batch/v1
+    uid: cronjob
+spec:
+  selector:
+    matchLabels:
+      app: emoji-svc`,
+					},
+				},
+			},
+			// Daemonset
+			{
 				err: nil,
 				k8sResInput: `
 apiVersion: apps/v1
@@ -485,11 +618,13 @@ kind: DaemonSet
 metadata:
   name: emoji
   namespace: emojivoto
+  uid: daemonset
 spec:
   selector:
     matchLabels:
       app: emoji-svc`,
-				k8sResResults: []string{`
+				resources: resources{
+					results: []string{`
 apiVersion: v1
 kind: Pod
 metadata:
@@ -497,24 +632,31 @@ metadata:
   namespace: emojivoto
   labels:
     app: emoji-svc
+  ownerReferences:
+  - apiVersion: apps/v1
+    uid: daemonset
 status:
   phase: Running`,
+					},
+					misc: []string{},
 				},
-				k8sResMisc: []string{},
 			},
-			getPodsForExpected{
+			// replicaset
+			{
 				err: nil,
 				k8sResInput: `
-apiVersion: apps/v1beta2
+apiVersion: apps/v1
 kind: ReplicaSet
 metadata:
   name: emoji
   namespace: emojivoto
+  uid: replicaset
 spec:
   selector:
     matchLabels:
       app: emoji-svc`,
-				k8sResResults: []string{`
+				resources: resources{
+					results: []string{`
 apiVersion: v1
 kind: Pod
 metadata:
@@ -522,10 +664,13 @@ metadata:
   namespace: emojivoto
   labels:
     app: emoji-svc
+  ownerReferences:
+  - apiVersion: apps/v1
+    uid: replicaset
 status:
   phase: Running`,
-				},
-				k8sResMisc: []string{`
+					},
+					misc: []string{`
 apiVersion: v1
 kind: Pod
 metadata:
@@ -533,11 +678,16 @@ metadata:
   namespace: emojivoto
   labels:
     app: emoji-svc
+  ownerReferences:
+  - apiVersion: apps/v1
+    uid: replicaset
 status:
   phase: Finished`,
+					},
 				},
 			},
-			getPodsForExpected{
+			// single pod
+			{
 				err: nil,
 				k8sResInput: `
 apiVersion: v1
@@ -547,9 +697,13 @@ metadata:
   namespace: emojivoto
   labels:
     app: emoji-svc
+  ownerReferences:
+  - apiVersion: apps/v1
+    uid: singlePod
 status:
   phase: Running`,
-				k8sResResults: []string{`
+				resources: resources{
+					results: []string{`
 apiVersion: v1
 kind: Pod
 metadata:
@@ -557,10 +711,13 @@ metadata:
   namespace: emojivoto
   labels:
     app: emoji-svc
+  ownerReferences:
+  - apiVersion: apps/v1
+    uid: singlePod
 status:
   phase: Running`,
-				},
-				k8sResMisc: []string{`
+					},
+					misc: []string{`
 apiVersion: v1
 kind: Pod
 metadata:
@@ -570,88 +727,389 @@ metadata:
     app: emoji-svc
 status:
   phase: Running`,
+					},
+				},
+			},
+			// deployment
+			{
+				err: nil,
+				k8sResInput: `
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    deployment.kubernetes.io/revision: "2"
+  name: emojivoto-meshed
+  namespace: emojivoto
+  uid: deployment
+  labels:
+    app: emoji-svc
+spec:
+  selector:
+    matchLabels:
+      app: emoji-svc`,
+				resources: resources{
+					results: []string{`
+apiVersion: v1
+kind: Pod
+metadata:
+  name: emojivoto-meshed
+  namespace: emojivoto
+  ownerReferences:
+  - apiVersion: apps/v1
+    uid: deploymentRS
+  labels:
+    app: emoji-svc
+    pod-template-hash: deploymentPod
+status:
+  phase: Running`,
+					},
+					misc: []string{`
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  uid: deploymentRS
+  annotations:
+    deployment.kubernetes.io/revision: "2"
+  name: emojivoto-meshed_2
+  namespace: emojivoto
+  labels:
+    app: emoji-svc
+    pod-template-hash: deploymentPod
+  ownerReferences:
+  - apiVersion: apps/v1
+    uid: deployment
+spec:
+  selector:
+    matchLabels:
+      app: emoji-svc
+      pod-template-hash: deploymentPod`,
+						`apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  uid: deploymentRSOld
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+  name: emojivoto-meshed_1
+  namespace: emojivoto
+  labels:
+    app: emoji-svc
+    pod-template-hash: deploymentPodOld
+  ownerReferences:
+  - apiVersion: apps/v1
+    uid: deployment
+spec:
+  selector:
+    matchLabels:
+      app: emoji-svc
+      pod-template-hash: deploymentPodOld`,
+					},
+				},
+			},
+			// deployment without RS
+			{
+				err: nil,
+				k8sResInput: `
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    deployment.kubernetes.io/revision: "2"
+  name: emojivoto-meshed
+  namespace: emojivoto
+  uid: deploymentWithoutRS
+  labels:
+    app: emoji-svc
+spec:
+  selector:
+    matchLabels:
+      app: emoji-svc`,
+				resources: resources{
+					results: []string{},
+					misc: []string{`
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  uid: AnotherRS
+  annotations:
+    deployment.kubernetes.io/revision: "2"
+  name: emojivoto-meshed_2
+  namespace: emojivoto
+  labels:
+    app: emoji-svc
+    pod-template-hash: doesntMatter
+  ownerReferences:
+  - apiVersion: apps/v1
+    uid: doesntMatch
+spec:
+  selector:
+    matchLabels:
+      app: emoji-svc
+      pod-template-hash: doesntMatter`,
+					},
+				},
+			},
+			// Deployment with 2 replicasets
+			{
+				err: nil,
+				k8sResInput: `
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    deployment.kubernetes.io/revision: "2"
+  name: emojivoto-meshed
+  namespace: emojivoto
+  uid: deployment2RS
+  labels:
+    app: emoji-svc
+spec:
+  selector:
+    matchLabels:
+      app: emoji-svc`,
+				resources: resources{
+					results: []string{`
+apiVersion: v1
+kind: Pod
+metadata:
+  name: emojivoto-meshed-pod1
+  namespace: emojivoto
+  ownerReferences:
+  - apiVersion: apps/v1
+    uid: RS1
+  labels:
+    app: emoji-svc
+    pod-template-hash: pod1
+status:
+  phase: Running`,
+						`apiVersion: v1
+kind: Pod
+metadata:
+  name: emojivoto-meshed-pod2
+  namespace: emojivoto
+  ownerReferences:
+  - apiVersion: apps/v1
+    uid: RS2
+  labels:
+    app: emoji-svc
+    pod-template-hash: pod2
+status:
+  phase: Running`,
+					},
+					misc: []string{`
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  uid: RS1
+  annotations:
+    deployment.kubernetes.io/revision: "2"
+  name: emojivoto-meshed_2
+  namespace: emojivoto
+  labels:
+    app: emoji-svc
+    pod-template-hash: pod1
+  ownerReferences:
+  - apiVersion: apps/v1
+    uid: deployment2RS
+spec:
+  selector:
+    matchLabels:
+      app: emoji-svc
+      pod-template-hash: pod1`,
+						`apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  uid: RS2
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+  name: emojivoto-meshed_1
+  namespace: emojivoto
+  labels:
+    app: emoji-svc
+    pod-template-hash: pod2
+  ownerReferences:
+  - apiVersion: apps/v1
+    uid: deployment2RS
+spec:
+  selector:
+    matchLabels:
+      app: emoji-svc
+      pod-template-hash: pod2`,
+					},
+				},
+			},
+			// Deployment 2 Pods just one valid
+			{
+				err: nil,
+				k8sResInput: `
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    deployment.kubernetes.io/revision: "2"
+  name: emojivoto-meshed
+  namespace: emojivoto
+  uid: deployment2Pods
+  labels:
+    app: emoji-svc
+spec:
+  selector:
+    matchLabels:
+      app: emoji-svc`,
+				resources: resources{
+					results: []string{`apiVersion: v1
+kind: Pod
+metadata:
+  name: emojivoto-meshed-with-RS
+  namespace: emojivoto
+  ownerReferences:
+  - apiVersion: apps/v1
+    uid: validRS
+  labels:
+    app: emoji-svc
+    pod-template-hash: podWithRS
+status:
+  phase: Running`,
+					},
+					misc: []string{`
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  uid: validRS
+  annotations:
+    deployment.kubernetes.io/revision: "2"
+  name: emojivoto-meshed_2
+  namespace: emojivoto
+  labels:
+    app: emoji-svc
+    pod-template-hash: podWithRS
+  ownerReferences:
+  - apiVersion: apps/v1
+    uid: deployment2Pods
+spec:
+  selector:
+    matchLabels:
+      app: emoji-svc
+      pod-template-hash: podWithRS`,
+						`apiVersion: v1
+kind: Pod
+metadata:
+  name: emojivoto-meshed-without-RS
+  namespace: emojivoto
+  ownerReferences:
+  - apiVersion: apps/v1
+    uid: notHere
+  labels:
+    app: emoji-svc
+    pod-template-hash: invalidPod
+status:
+  phase: Running`,
+					},
 				},
 			},
 		}
 
 		for _, exp := range expectations {
-			k8sInputObj, err := toRuntimeObject(exp.k8sResInput)
+			k8sInputObj, err := k8s.ToRuntimeObject(exp.k8sResInput)
 			if err != nil {
 				t.Fatalf("could not decode yml: %s", err)
 			}
 
-			api, k8sResults, err := newAPI(exp.k8sResResults, exp.k8sResMisc...)
+			api, _, k8sResults, err := newMockAPI(true, exp.resources)
 			if err != nil {
-				t.Fatalf("newAPI error: %s", err)
+				t.Fatalf("newMockAPI error: %s", err)
 			}
 
-			k8sResultPods := []*apiv1.Pod{}
+			k8sResultPods := []*corev1.Pod{}
 			for _, obj := range k8sResults {
-				k8sResultPods = append(k8sResultPods, obj.(*apiv1.Pod))
+				k8sResultPods = append(k8sResultPods, obj.(*corev1.Pod))
 			}
 
 			pods, err := api.GetPodsFor(k8sInputObj, false)
-			if err != exp.err {
+			if !errors.Is(err, exp.err) {
 				t.Fatalf("api.GetPodsFor() unexpected error, expected [%s] got: [%s]", exp.err, err)
 			}
 
-			if !reflect.DeepEqual(pods, k8sResultPods) {
+			if len(pods) != len(k8sResultPods) {
 				t.Fatalf("Expected: %+v, Got: %+v", k8sResultPods, pods)
+			}
+
+			for _, pod := range pods {
+				found := false
+				for _, resultPod := range k8sResultPods {
+					if reflect.DeepEqual(pod, resultPod) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("Expected: %+v, Got: %+v", k8sResultPods, pods)
+				}
 			}
 		}
 	})
 }
 
+// TestGetOwnerKindAndName tests GetOwnerKindAndName for both api and
+// metadataAPI. Both return strings, so unlike TestGetObjects above, there's no
+// need to create []*metav1.PartialObjectMetadata fixtures
 func TestGetOwnerKindAndName(t *testing.T) {
-	for _, tt := range []struct {
+	for i, tt := range []struct {
+		resources
+
 		expectedOwnerKind string
 		expectedOwnerName string
-		podConfig         string
-		extraConfigs      []string
 	}{
 		{
 			expectedOwnerKind: "deployment",
 			expectedOwnerName: "t2",
-			podConfig: `
+			resources: resources{
+				results: []string{`
 apiVersion: v1
 kind: Pod
 metadata:
   name: t2-5f79f964bc-d5jvf
   namespace: default
   ownerReferences:
-  - apiVersion: apps/v1beta2
+  - apiVersion: apps/v1
     kind: ReplicaSet
     name: t2-5f79f964bc`,
-			extraConfigs: []string{`
-apiVersion: apps/v1beta2
+				},
+				misc: []string{`
+apiVersion: apps/v1
 kind: ReplicaSet
 metadata:
   name: t2-5f79f964bc
   namespace: default
   ownerReferences:
-  - apiVersion: apps/v1beta2
+  - apiVersion: apps/v1
     kind: Deployment
     name: t2`,
+				},
 			},
 		},
 		{
 			expectedOwnerKind: "replicaset",
 			expectedOwnerName: "t1-b4f55d87f",
-			podConfig: `
+			resources: resources{
+				results: []string{`
 apiVersion: v1
 kind: Pod
 metadata:
   name: t1-b4f55d87f-98dbz
   namespace: default
   ownerReferences:
-  - apiVersion: apps/v1beta2
+  - apiVersion: apps/v1
     kind: ReplicaSet
     name: t1-b4f55d87f`,
+				},
+			},
 		},
 		{
 			expectedOwnerKind: "job",
 			expectedOwnerName: "slow-cooker",
-			podConfig: `
+			resources: resources{
+				results: []string{`
 apiVersion: v1
 kind: Pod
 metadata:
@@ -661,11 +1119,14 @@ metadata:
   - apiVersion: batch/v1
     kind: Job
     name: slow-cooker`,
+				},
+			},
 		},
 		{
 			expectedOwnerKind: "replicationcontroller",
 			expectedOwnerName: "web",
-			podConfig: `
+			resources: resources{
+				results: []string{`
 apiVersion: v1
 kind: Pod
 metadata:
@@ -675,51 +1136,136 @@ metadata:
   - apiVersion: v1
     kind: ReplicationController
     name: web`,
+				},
+			},
 		},
 		{
 			expectedOwnerKind: "pod",
 			expectedOwnerName: "vote-bot",
-			podConfig: `
+			resources: resources{
+				results: []string{`
 apiVersion: v1
 kind: Pod
 metadata:
   name: vote-bot
   namespace: default`,
+				},
+			},
+		},
+		{
+			expectedOwnerKind: "cronjob",
+			expectedOwnerName: "my-cronjob",
+			resources: resources{
+				results: []string{`
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-pod
+  namespace: my-ns
+  ownerReferences:
+  - apiVersion: batch/v1
+    kind: Job
+    name: my-job`,
+				},
+				misc: []string{`
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: my-job
+  namespace: my-ns
+  ownerReferences:
+  - apiVersion: batch/v1
+    kind: CronJob
+    name: my-cronjob`,
+				},
+			},
+		},
+		{
+			expectedOwnerKind: "replicaset",
+			expectedOwnerName: "invalid-rs-parent-2abdffa",
+			resources: resources{
+				results: []string{`
+apiVersion: v1
+kind: Pod
+metadata:
+  name: invalid-rs-parent-dcfq4
+  namespace: default
+  ownerReferences:
+  - apiVersion: v1
+    kind: ReplicaSet
+    name: invalid-rs-parent-2abdffa`,
+				},
+				misc: []string{`
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: invalid-rs-parent-2abdffa
+  namespace: default
+  ownerReferences:
+  - apiVersion: invalidParent/v1
+    kind: InvalidParentKind
+    name: invalid-parent`,
+				},
+			},
 		},
 	} {
-		api, objs, err := newAPI([]string{tt.podConfig}, tt.extraConfigs...)
-		if err != nil {
-			t.Fatalf("newAPI error: %s", err)
-		}
+		tt := tt // pin
+		for _, retry := range []bool{
+			false,
+			true,
+		} {
+			retry := retry // pin
+			t.Run(fmt.Sprintf("%d/retry:%t", i, retry), func(t *testing.T) {
+				api, metadataAPI, objs, err := newMockAPI(!retry, tt.resources)
+				if err != nil {
+					t.Fatalf("newMockAPI error: %s", err)
+				}
 
-		pod := objs[0].(*apiv1.Pod)
-		ownerKind, ownerName := api.GetOwnerKindAndName(pod)
+				pod := objs[0].(*corev1.Pod)
+				ownerKind, ownerName := api.GetOwnerKindAndName(context.Background(), pod, retry)
 
-		if ownerKind != tt.expectedOwnerKind {
-			t.Fatalf("Expected kind to be [%s], got [%s]", tt.expectedOwnerKind, ownerKind)
-		}
+				if ownerKind != tt.expectedOwnerKind {
+					t.Fatalf("Expected kind to be [%s], got [%s]", tt.expectedOwnerKind, ownerKind)
+				}
 
-		if ownerName != tt.expectedOwnerName {
-			t.Fatalf("Expected name to be [%s], got [%s]", tt.expectedOwnerName, ownerName)
+				if ownerName != tt.expectedOwnerName {
+					t.Fatalf("Expected name to be [%s], got [%s]", tt.expectedOwnerName, ownerName)
+				}
+
+				ownerKind, ownerName, err = metadataAPI.GetOwnerKindAndName(context.Background(), pod, retry)
+				if err != nil {
+					t.Fatalf("Unexpected error: %s", err)
+				}
+
+				if ownerKind != tt.expectedOwnerKind {
+					t.Fatalf("Expected kind to be [%s], got [%s]", tt.expectedOwnerKind, ownerKind)
+				}
+
+				if ownerName != tt.expectedOwnerName {
+					t.Fatalf("Expected name to be [%s], got [%s]", tt.expectedOwnerName, ownerName)
+				}
+			})
 		}
 	}
 }
 
 func TestGetServiceProfileFor(t *testing.T) {
 	for _, tt := range []struct {
+		resources
+
 		expectedRouteNames []string
-		profileConfigs     []string
 	}{
 		// No service profiles -> default service profile
 		{
 			expectedRouteNames: []string{},
-			profileConfigs:     []string{},
+			resources:          resources{},
 		},
 		// Service profile in unrelated namespace -> default service profile
 		{
 			expectedRouteNames: []string{},
-			profileConfigs: []string{`
-apiVersion: linkerd.io/v1alpha1
+			resources: resources{
+				results: []string{`
+apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: books.server.svc.cluster.local
@@ -729,13 +1275,15 @@ spec:
   - condition:
       pathRegex: /server
     name: server`,
+				},
 			},
 		},
 		// Uses service profile in server namespace
 		{
 			expectedRouteNames: []string{"server"},
-			profileConfigs: []string{`
-apiVersion: linkerd.io/v1alpha1
+			resources: resources{
+				results: []string{`
+apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: books.server.svc.cluster.local
@@ -745,13 +1293,15 @@ spec:
   - condition:
       pathRegex: /server
     name: server`,
+				},
 			},
 		},
 		// Uses service profile in client namespace
 		{
 			expectedRouteNames: []string{"client"},
-			profileConfigs: []string{`
-apiVersion: linkerd.io/v1alpha1
+			resources: resources{
+				results: []string{`
+apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: books.server.svc.cluster.local
@@ -761,13 +1311,15 @@ spec:
   - condition:
       pathRegex: /client
     name: client`,
+				},
 			},
 		},
-		// Service porfile in client namespace takes priority
+		// Service profile in client namespace takes priority
 		{
 			expectedRouteNames: []string{"client"},
-			profileConfigs: []string{`
-apiVersion: linkerd.io/v1alpha1
+			resources: resources{
+				results: []string{`
+apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: books.server.svc.cluster.local
@@ -777,8 +1329,8 @@ spec:
   - condition:
       pathRegex: /server
     name: server`,
-				`
-apiVersion: linkerd.io/v1alpha1
+					`
+apiVersion: linkerd.io/v1alpha2
 kind: ServiceProfile
 metadata:
   name: books.server.svc.cluster.local
@@ -788,22 +1340,23 @@ spec:
   - condition:
       pathRegex: /client
     name: client`,
+				},
 			},
 		},
 	} {
-		api, _, err := newAPI(tt.profileConfigs)
+		api, _, _, err := newMockAPI(true, tt.resources)
 		if err != nil {
-			t.Fatalf("newAPI error: %s", err)
+			t.Fatalf("newMockAPI error: %s", err)
 		}
 
-		svc := apiv1.Service{
+		svc := corev1.Service{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "books",
 				Namespace: "server",
 			},
 		}
 
-		sp := api.GetServiceProfileFor(&svc, "client")
+		sp := api.GetServiceProfileFor(&svc, "client", "cluster.local")
 
 		if len(sp.Spec.Routes) != len(tt.expectedRouteNames) {
 			t.Fatalf("Expected %d routes, got %d", len(tt.expectedRouteNames), len(sp.Spec.Routes))
@@ -815,4 +1368,94 @@ spec:
 			}
 		}
 	}
+}
+
+func TestGetServicesFor(t *testing.T) {
+
+	type getServicesForExpected struct {
+		resources
+
+		err         error
+		k8sResInput string // object used as input to GetServicesFor()
+	}
+
+	t.Run("GetServicesFor", func(t *testing.T) {
+		expectations := []getServicesForExpected{
+			// If a service contains a pod, GetPodsFor should return the service.
+			{
+				err: nil,
+				k8sResInput: `
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-pod
+  namespace: emojivoto
+  labels:
+    app: my-pod
+status:
+  phase: Running`,
+				resources: resources{
+					results: []string{`
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-svc
+  namespace: emojivoto
+spec:
+  type: ClusterIP
+  selector:
+    app: my-pod`,
+					},
+					misc: []string{},
+				},
+			},
+		}
+
+		for _, exp := range expectations {
+			k8sInputObj, err := k8s.ToRuntimeObject(exp.k8sResInput)
+			if err != nil {
+				t.Fatalf("could not decode yml: %s", err)
+			}
+
+			exp.misc = append(exp.misc, exp.k8sResInput)
+			api, _, k8sResults, err := newMockAPI(true, exp.resources)
+			if err != nil {
+				t.Fatalf("newMockAPI error: %s", err)
+			}
+
+			k8sResultServices := []*corev1.Service{}
+			for _, obj := range k8sResults {
+				k8sResultServices = append(k8sResultServices, obj.(*corev1.Service))
+			}
+
+			services, err := api.GetServicesFor(k8sInputObj, false)
+			if !errors.Is(err, exp.err) {
+				t.Fatalf("api.GetServicesFor() unexpected error, expected [%s] got: [%s]", exp.err, err)
+			}
+
+			if len(services) != len(k8sResultServices) {
+				t.Fatalf("Expected: %+v, Got: %+v", k8sResultServices, services)
+			}
+
+			for _, service := range services {
+				found := false
+				for _, resultService := range k8sResultServices {
+					if reflect.DeepEqual(service, resultService) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("Expected: %+v, Got: %+v", k8sResultServices, services)
+				}
+			}
+		}
+
+	})
+}
+
+func unexpectedErrors(err, expErr error) bool {
+	return (err == nil && expErr != nil) ||
+		(err != nil && expErr == nil) ||
+		!strings.Contains(err.Error(), expErr.Error())
 }

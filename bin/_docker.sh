@@ -1,21 +1,49 @@
+#!/usr/bin/env bash
+
 set -eu
 
-bindir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+docker buildx &> /dev/null || { echo 'Please install docker buildx before proceeding'; exit 1; }
 
-. $bindir/_log.sh
+bindir=$( cd "${BASH_SOURCE[0]%/*}" && pwd )
 
-# TODO this should be set to the canonical public docker regsitry; we can override this
-# docker regsistry in, for instance, CI.
-export DOCKER_REGISTRY="${DOCKER_REGISTRY:-gcr.io/linkerd-io}"
+# shellcheck source=_log.sh
+. "$bindir"/_log.sh
+# shellcheck source=_os.sh
+. "$bindir"/_os.sh
 
-# When set, causes docker's build output to be emitted to stderr.
-export DOCKER_TRACE="${DOCKER_TRACE:-}"
+# TODO this should be set to the canonical public docker registry; we can override this
+# docker registry in, for instance, CI.
+export DOCKER_REGISTRY=${DOCKER_REGISTRY:-cr.l5d.io/linkerd}
+
+# populated in GitHub Actions
+export ACTIONS_CACHE_URL=${ACTIONS_CACHE_URL:-}
+
+export DOCKER_TARGET=${DOCKER_TARGET:-$(os)}
+
+# When set together with DOCKER_TARGET=multi-arch, it will push the multi-arch images to the registry
+export DOCKER_PUSH=${DOCKER_PUSH:-}
+
+export DOCKER_BUILDER=${DOCKER_BUILDER:-}
+
+# Default supported docker image architectures
+export SUPPORTED_ARCHS=${SUPPORTED_ARCHS:-linux/amd64,linux/arm64}
+
+# Splitting of DOCKER_IMAGES variable is desired.
+# shellcheck disable=SC2206
+export DOCKER_IMAGES=(${DOCKER_IMAGES:-
+    controller
+    metrics-api
+    debug
+    proxy
+    web
+    tap
+})
 
 docker_repo() {
-    repo="$1"
+    repo=$1
 
-    name="$repo"
-    if [ -n "${DOCKER_REGISTRY:-}" ]; then
+    name=$repo
+    if [ "${DOCKER_REGISTRY:-}" ]; then
         name="$DOCKER_REGISTRY/$name"
     fi
 
@@ -23,53 +51,84 @@ docker_repo() {
 }
 
 docker_build() {
-    repo=$(docker_repo "$1")
+    name=$1
+    repo=$(docker_repo "$name")
     shift
 
-    tag="$1"
+    tag=$1
     shift
 
-    file="$1"
+    file=$1
     shift
 
-    extra="$@"
+    rootdir=${ROOTDIR:-$( cd "$bindir"/.. && pwd )}
+    cache_params=''
 
-    output="/dev/null"
-    if [ -n "$DOCKER_TRACE" ]; then
-        output="/dev/stderr"
+    if [ "$ACTIONS_CACHE_URL" ]; then
+      cache_params="--cache-from type=gha,scope=$name-$DOCKER_TARGET --cache-to type=gha,scope=$name-$DOCKER_TARGET,mode=max"
     fi
 
-    rootdir="$( cd $bindir/.. && pwd )"
+    output_params='--load'
+    if [ "$DOCKER_TARGET" = 'multi-arch' ]; then
+      output_params="--platform $SUPPORTED_ARCHS"
+      if [ "$DOCKER_PUSH" ]; then
+        output_params+=' --push'
+      else
+        echo 'Error: env DOCKER_PUSH=1 is missing
+When building the multi-arch images it is required to push the images to the registry
+See https://github.com/docker/buildx/issues/59 for more details'
+        exit 1
+      fi
+    fi
 
-    log_debug "  :; docker build $rootdir -t $repo:$tag -f $file $extra"
-    docker build $rootdir \
+    # Allow for specifying docker builder engine
+    # This is a great way to use k8s to build docker images on native hardware instead of emulated
+    # See https://docs.docker.com/build/drivers/kubernetes/ for an example
+    if [ "$DOCKER_BUILDER" ]; then
+      output_params+=" --builder=$DOCKER_BUILDER"
+    fi
+
+    log_debug "  :; docker buildx $rootdir $cache_params $output_params -t $repo:$tag -f $file $*"
+    mkdir -p target
+    # shellcheck disable=SC2086
+    docker buildx build "$rootdir" $cache_params \
+        $output_params \
         -t "$repo:$tag" \
         -f "$file" \
-        $extra \
-        > "$output"
+        --metadata-file target/metadata-"$name".json \
+        "$@"
 
     echo "$repo:$tag"
 }
 
 docker_pull() {
     repo=$(docker_repo "$1")
-    tag="$2"
+    tag=$2
     log_debug "  :; docker pull $repo:$tag"
     docker pull "$repo:$tag"
 }
 
 docker_push() {
     repo=$(docker_repo "$1")
-    tag="$2"
+    tag=$2
     log_debug "  :; docker push $repo:$tag"
     docker push "$repo:$tag"
 }
 
 docker_retag() {
     repo=$(docker_repo "$1")
-    from="$2"
-    to="$3"
+    from=$2
+    to=$3
     log_debug "  :; docker tag $repo:$from $repo:$to"
     docker tag "$repo:$from" "$repo:$to"
     echo "$repo:$to"
+}
+
+docker_rename_registry() {
+  tag=$1
+  from=$2
+  to=$3
+  for img in "${DOCKER_IMAGES[@]}" ; do
+    docker tag "$from/$img:$tag" "$to/$img:$tag"
+  done
 }

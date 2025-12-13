@@ -1,5 +1,4 @@
 /*
-
 Package testutil provides helpers for running the linkerd integration tests.
 
 All helpers are defined as functions on the TestHelper struct, which you should
@@ -30,9 +29,11 @@ TestMain function. For example:
 Calling NewTestHelper adds the following command line flags:
 
 	-linkerd string
-			path to the linkerd binary to test
+		path to the linkerd binary to test
 	-linkerd-namespace string
-			the namespace where linkerd is installed (default "linkerd")
+		the namespace where linkerd is installed (default "linkerd")
+	-k8s-context string
+		the kubernetes context associated with the test cluster (default "")
 	-integration-tests
 		must be provided to run the integration tests
 
@@ -42,6 +43,5 @@ the tests aren't inadvertently executed when unit tests for the project are run.
 TestHelper embeds KubernetesHelper, so all functions defined on KubernetesHelper
 are also available to instances of TestHelper. See the individual function
 definitions for details on how to use each helper in tests.
-
 */
 package testutil

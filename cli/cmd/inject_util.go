@@ -3,63 +3,41 @@ package cmd
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
-	"github.com/linkerd/linkerd2/pkg/k8s"
-	appsV1 "k8s.io/api/apps/v1"
-	batchV1 "k8s.io/api/batch/v1"
-	"k8s.io/api/core/v1"
-	"k8s.io/api/extensions/v1beta1"
-	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"github.com/linkerd/linkerd2/pkg/inject"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	yamlDecoder "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
 )
 
 type resourceTransformer interface {
-	transform([]byte, *injectOptions) ([]byte, []injectReport, error)
-	generateReport([]injectReport, io.Writer)
-}
-
-type injectReport struct {
-	kind                string
-	name                string
-	hostNetwork         bool
-	sidecar             bool
-	udp                 bool // true if any port in any container has `protocol: UDP`
-	unsupportedResource bool
-	injectDisabled      bool
-}
-
-type resourceConfig struct {
-	obj             interface{}
-	om              objMeta
-	meta            metaV1.TypeMeta
-	podSpec         *v1.PodSpec
-	objectMeta      *metaV1.ObjectMeta
-	dnsNameOverride string
-	k8sLabels       map[string]string
-}
-
-func (i injectReport) resName() string {
-	return fmt.Sprintf("%s/%s", i.kind, i.name)
+	transform([]byte) ([]byte, []inject.Report, error)
+	generateReport([]inject.Report, io.Writer)
 }
 
 // Returns the integer representation of os.Exit code; 0 on success and 1 on failure.
-func transformInput(inputs []io.Reader, errWriter, outWriter io.Writer, options *injectOptions, rt resourceTransformer) int {
+func transformInput(inputs []io.Reader, errWriter, outWriter io.Writer, rt resourceTransformer, format string) int {
 	postInjectBuf := &bytes.Buffer{}
 	reportBuf := &bytes.Buffer{}
 
 	for _, input := range inputs {
-		err := ProcessYAML(input, postInjectBuf, reportBuf, options, rt)
-		if err != nil {
-			fmt.Fprintf(errWriter, "Error transforming resources: %v\n", err)
+		errs := processYAML(input, postInjectBuf, reportBuf, rt, format)
+		if len(errs) > 0 {
+			fmt.Fprintf(errWriter, "Error transforming resources:\n%v", concatErrors(errs, "\n"))
 			return 1
 		}
-		_, err = io.Copy(outWriter, postInjectBuf)
+
+		_, err := io.Copy(outWriter, postInjectBuf)
 
 		// print error report after yaml output, for better visibility
 		io.Copy(errWriter, reportBuf)
@@ -72,50 +50,89 @@ func transformInput(inputs []io.Reader, errWriter, outWriter io.Writer, options 
 	return 0
 }
 
-// ProcessYAML takes an input stream of YAML, outputting injected/uninjected YAML to out.
-func ProcessYAML(in io.Reader, out io.Writer, report io.Writer, options *injectOptions, rt resourceTransformer) error {
+// processYAML takes an input stream of YAML, outputting injected/uninjected YAML to out.
+func processYAML(in io.Reader, out io.Writer, report io.Writer, rt resourceTransformer, format string) []error {
 	reader := yamlDecoder.NewYAMLReader(bufio.NewReaderSize(in, 4096))
 
-	injectReports := []injectReport{}
+	reports := []inject.Report{}
+
+	errs := []error{}
 
 	// Iterate over all YAML objects in the input
 	for {
 		// Read a single YAML object
 		bytes, err := reader.Read()
-		if err == io.EOF {
-			break
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return []error{err}
+		}
+
+		var result []byte
+		var irs []inject.Report
+
+		isList, err := kindIsList(bytes)
+		if err != nil {
+			return []error{err}
+		}
+		if isList {
+			result, irs, err = processList(bytes, rt)
+		} else {
+			result, irs, err = rt.transform(bytes)
 		}
 		if err != nil {
-			return err
+			errs = append(errs, err)
+		}
+		reports = append(reports, irs...)
+
+		// If the format is set to json, we need to convert the yaml to json
+		if format == jsonOutput {
+			result, err = yaml.YAMLToJSON(result)
+			if err != nil {
+				errs = append(errs, err)
+			}
+		} else if format == yamlOutput {
+			// result is already in yaml format: noop.
+		} else {
+			errs = append(errs, fmt.Errorf("unsupported format %s", format))
 		}
 
-		result, irs, err := rt.transform(bytes, options)
-		if err != nil {
-			return err
+		if len(errs) == 0 {
+			out.Write(result)
+			if format == yamlOutput {
+				out.Write([]byte("---\n"))
+			}
+			if format == jsonOutput {
+				out.Write([]byte("\n"))
+			}
 		}
-
-		out.Write(result)
-		out.Write([]byte("---\n"))
-
-		injectReports = append(injectReports, irs...)
 	}
 
-	rt.generateReport(injectReports, report)
+	rt.generateReport(reports, report)
 
-	return nil
+	return errs
 }
 
-func processList(b []byte, options *injectOptions, rt resourceTransformer) ([]byte, []injectReport, error) {
-	var sourceList v1.List
-	if err := yaml.Unmarshal(b, &sourceList); err != nil {
+func kindIsList(bytes []byte) (bool, error) {
+	var meta metav1.TypeMeta
+	if err := yaml.Unmarshal(bytes, &meta); err != nil {
+		return false, err
+	}
+	return meta.Kind == "List", nil
+}
+
+func processList(bytes []byte, rt resourceTransformer) ([]byte, []inject.Report, error) {
+	var sourceList corev1.List
+	if err := yaml.Unmarshal(bytes, &sourceList); err != nil {
 		return nil, nil, err
 	}
 
-	injectReports := []injectReport{}
+	reports := []inject.Report{}
 	items := []runtime.RawExtension{}
 
 	for _, item := range sourceList.Items {
-		result, reports, err := rt.transform(item.Raw, options)
+		result, irs, err := rt.transform(item.Raw)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -129,7 +146,7 @@ func processList(b []byte, options *injectOptions, rt resourceTransformer) ([]by
 		}
 
 		items = append(items, runtime.RawExtension{Raw: injected})
-		injectReports = append(injectReports, reports...)
+		reports = append(reports, irs...)
 	}
 
 	sourceList.Items = items
@@ -137,166 +154,64 @@ func processList(b []byte, options *injectOptions, rt resourceTransformer) ([]by
 	if err != nil {
 		return nil, nil, err
 	}
-
-	return result, injectReports, nil
-}
-
-func (conf *resourceConfig) parse(bytes []byte, options *injectOptions, rt resourceTransformer) ([]byte, []injectReport, error) {
-	// The Kubernetes API is versioned and each version has an API modeled
-	// with its own distinct Go types. If we tell `yaml.Unmarshal()` which
-	// version we support then it will provide a representation of that
-	// object using the given type if possible. However, it only allows us
-	// to supply one object (of one type), so first we have to determine
-	// what kind of object `bytes` represents so we can pass an object of
-	// the correct type to `yaml.Unmarshal()`.
-	// ---------------------------------------
-	// Note: bytes is expected to be YAML and will only modify it when a
-	// supported type is found. Otherwise, it is returned unmodified.
-
-	// Unmarshal the object enough to read the Kind field
-	if err := yaml.Unmarshal(bytes, &conf.meta); err != nil {
-		return nil, nil, err
-	}
-
-	// retrieve the `metadata/name` field for reporting later
-	if err := yaml.Unmarshal(bytes, &conf.om); err != nil {
-		return nil, nil, err
-	}
-
-	conf.k8sLabels = map[string]string{}
-
-	// When injecting the linkerd proxy into a linkerd controller pod. The linkerd proxy's
-	// LINKERD2_PROXY_CONTROL_URL variable must be set to localhost for the following reasons:
-	//	1. According to https://github.com/kubernetes/minikube/issues/1568, minikube has an issue
-	//     where pods are unable to connect to themselves through their associated service IP.
-	//     Setting the LINKERD2_PROXY_CONTROL_URL to localhost allows the proxy to bypass kube DNS
-	//     name resolution as a workaround to this issue.
-	//  2. We avoid the TLS overhead in encrypting and decrypting intra-pod traffic i.e. traffic
-	//     between containers in the same pod.
-	//  3. Using a Service IP instead of localhost would mean intra-pod traffic would be load-balanced
-	//     across all controller pod replicas. This is undesirable as we would want all traffic between
-	//	   containers to be self contained.
-	//  4. We skip recording telemetry for intra-pod traffic within the control plane.
-	switch conf.meta.Kind {
-	case "Deployment":
-		var deployment v1beta1.Deployment
-		if err := yaml.Unmarshal(bytes, &deployment); err != nil {
-			return nil, nil, err
-		}
-
-		if deployment.Name == ControlPlanePodName && deployment.Namespace == controlPlaneNamespace {
-			conf.dnsNameOverride = LocalhostDNSNameOverride
-		}
-
-		conf.obj = &deployment
-		conf.k8sLabels[k8s.ProxyDeploymentLabel] = deployment.Name
-		conf.podSpec = &deployment.Spec.Template.Spec
-		conf.objectMeta = &deployment.Spec.Template.ObjectMeta
-
-	case "ReplicationController":
-		var rc v1.ReplicationController
-		if err := yaml.Unmarshal(bytes, &rc); err != nil {
-			return nil, nil, err
-		}
-
-		conf.obj = &rc
-		conf.k8sLabels[k8s.ProxyReplicationControllerLabel] = rc.Name
-		conf.podSpec = &rc.Spec.Template.Spec
-		conf.objectMeta = &rc.Spec.Template.ObjectMeta
-
-	case "ReplicaSet":
-		var rs v1beta1.ReplicaSet
-		if err := yaml.Unmarshal(bytes, &rs); err != nil {
-			return nil, nil, err
-		}
-
-		conf.obj = &rs
-		conf.k8sLabels[k8s.ProxyReplicaSetLabel] = rs.Name
-		conf.podSpec = &rs.Spec.Template.Spec
-		conf.objectMeta = &rs.Spec.Template.ObjectMeta
-
-	case "Job":
-		var job batchV1.Job
-		if err := yaml.Unmarshal(bytes, &job); err != nil {
-			return nil, nil, err
-		}
-
-		conf.obj = &job
-		conf.k8sLabels[k8s.ProxyJobLabel] = job.Name
-		conf.podSpec = &job.Spec.Template.Spec
-		conf.objectMeta = &job.Spec.Template.ObjectMeta
-
-	case "DaemonSet":
-		var ds v1beta1.DaemonSet
-		if err := yaml.Unmarshal(bytes, &ds); err != nil {
-			return nil, nil, err
-		}
-
-		conf.obj = &ds
-		conf.k8sLabels[k8s.ProxyDaemonSetLabel] = ds.Name
-		conf.podSpec = &ds.Spec.Template.Spec
-		conf.objectMeta = &ds.Spec.Template.ObjectMeta
-
-	case "StatefulSet":
-		var statefulset appsV1.StatefulSet
-		if err := yaml.Unmarshal(bytes, &statefulset); err != nil {
-			return nil, nil, err
-		}
-
-		conf.obj = &statefulset
-		conf.k8sLabels[k8s.ProxyStatefulSetLabel] = statefulset.Name
-		conf.podSpec = &statefulset.Spec.Template.Spec
-		conf.objectMeta = &statefulset.Spec.Template.ObjectMeta
-
-	case "Pod":
-		var pod v1.Pod
-		if err := yaml.Unmarshal(bytes, &pod); err != nil {
-			return nil, nil, err
-		}
-
-		conf.obj = &pod
-		conf.podSpec = &pod.Spec
-		conf.objectMeta = &pod.ObjectMeta
-
-	case "List":
-		// Lists are a little different than the other types. There's no immediate
-		// pod template. Because of this, we do a recursive call for each element
-		// in the list (instead of just marshaling the injected pod template).
-		return processList(bytes, options, rt)
-	}
-
-	return nil, nil, nil
+	return result, reports, nil
 }
 
 // Read all the resource files found in path into a slice of readers.
 // path can be either a file, directory or stdin.
 func read(path string) ([]io.Reader, error) {
-	var (
-		in  []io.Reader
-		err error
-	)
 	if path == "-" {
-		in = append(in, os.Stdin)
-	} else {
-		in, err = walk(path)
+		return []io.Reader{os.Stdin}, nil
+	}
+
+	if url, ok := toURL(path); ok {
+		if strings.ToLower(url.Scheme) != "https" {
+			return nil, fmt.Errorf("only HTTPS URLs are allowed")
+		}
+		resp, err := http.Get(url.String())
 		if err != nil {
 			return nil, err
 		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("unable to read URL %q, server reported %s, status code=%d", path, resp.Status, resp.StatusCode)
+		}
+
+		// Save to a buffer, so that response can be closed here
+		buf := new(bytes.Buffer)
+		_, err = buf.ReadFrom(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+
+		return []io.Reader{buf}, nil
 	}
 
-	return in, nil
+	return walk(path)
+}
+
+// checks if the given string is a valid URL
+func toURL(path string) (*url.URL, bool) {
+	u, err := url.ParseRequestURI(path)
+	if err == nil && u.Host != "" && u.Scheme != "" {
+		return u, true
+	}
+
+	return nil, false
 }
 
 // walk walks the file tree rooted at path. path may be a file or a directory.
 // Creates a reader for each file found.
 func walk(path string) ([]io.Reader, error) {
-	stat, err := os.Stat(path)
+	p := filepath.Clean(path)
+	stat, err := os.Stat(p)
 	if err != nil {
 		return nil, err
 	}
 
 	if !stat.IsDir() {
-		file, err := os.Open(path)
+		file, err := os.Open(p)
 		if err != nil {
 			return nil, err
 		}
@@ -305,7 +220,7 @@ func walk(path string) ([]io.Reader, error) {
 	}
 
 	var in []io.Reader
-	werr := filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
+	werr := filepath.Walk(p, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -314,7 +229,7 @@ func walk(path string) ([]io.Reader, error) {
 			return nil
 		}
 
-		file, err := os.Open(path)
+		file, err := os.Open(filepath.Clean(path))
 		if err != nil {
 			return err
 		}
@@ -328,4 +243,16 @@ func walk(path string) ([]io.Reader, error) {
 	}
 
 	return in, nil
+}
+
+// a helper function to concatenate the items in a []error
+// into a single error
+func concatErrors(errs []error, delimiter string) error {
+	message, errs := errs[0].Error(), errs[1:] // pop the first element of the errs
+	// this is done so that the first error message is not prefixed by the delimiter
+
+	for _, err := range errs {
+		message = fmt.Sprintf("%s%s%s", message, delimiter, err.Error())
+	}
+	return errors.New(message)
 }

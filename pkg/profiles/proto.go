@@ -2,35 +2,30 @@ package profiles
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"github.com/emicklei/proto"
-	sp "github.com/linkerd/linkerd2/controller/gen/apis/serviceprofile/v1alpha1"
-	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	sp "github.com/linkerd/linkerd2/controller/gen/apis/serviceprofile/v1alpha2"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // RenderProto reads a protobuf definition file and renders the corresponding
 // ServiceProfile to a buffer, given a namespace, service, and control plane
 // namespace.
-func RenderProto(fileName, namespace, name string, w io.Writer) error {
+func RenderProto(fileName, namespace, name, clusterDomain string) (*sp.ServiceProfile, error) {
 	input, err := readFile(fileName)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	parser := proto.NewParser(input)
 
-	profile, err := protoToServiceProfile(parser, namespace, name)
-	if err != nil {
-		return err
-	}
-
-	return writeProfile(*profile, w)
+	return protoToServiceProfile(parser, namespace, name, clusterDomain)
 }
 
-func protoToServiceProfile(parser *proto.Parser, namespace, name string) (*sp.ServiceProfile, error) {
+func protoToServiceProfile(parser *proto.Parser, namespace, name, clusterDomain string) (*sp.ServiceProfile, error) {
 	definition, err := parser.Parse()
 	if err != nil {
 		return nil, err
@@ -45,12 +40,21 @@ func protoToServiceProfile(parser *proto.Parser, namespace, name string) (*sp.Se
 			pkg = typed.Name
 		case *proto.RPC:
 			if service, ok := typed.Parent.(*proto.Service); ok {
+				var path string
+				switch pkg {
+				case "":
+					path = fmt.Sprintf("/%s/%s", service.Name, typed.Name)
+				default:
+					path = fmt.Sprintf("/%s.%s/%s", pkg, service.Name, typed.Name)
+				}
+
 				route := &sp.RouteSpec{
 					Name: typed.Name,
 					Condition: &sp.RequestMatch{
 						Method:    http.MethodPost,
-						PathRegex: regexp.QuoteMeta(fmt.Sprintf("/%s.%s/%s", pkg, service.Name, typed.Name)),
+						PathRegex: regexp.QuoteMeta(path),
 					},
+					IsRetryable: isMethodRetryable(typed),
 				}
 				routes = append(routes, route)
 			}
@@ -60,8 +64,8 @@ func protoToServiceProfile(parser *proto.Parser, namespace, name string) (*sp.Se
 	proto.Walk(definition, handle)
 
 	return &sp.ServiceProfile{
-		ObjectMeta: meta_v1.ObjectMeta{
-			Name:      fmt.Sprintf("%s.%s.svc.cluster.local", name, namespace),
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s.%s.svc.%s", name, namespace, clusterDomain),
 			Namespace: namespace,
 		},
 		TypeMeta: ServiceProfileMeta,
@@ -69,4 +73,25 @@ func protoToServiceProfile(parser *proto.Parser, namespace, name string) (*sp.Se
 			Routes: routes,
 		},
 	}, nil
+}
+
+func isMethodRetryable(rpc *proto.RPC) bool {
+	for _, e := range rpc.Elements {
+		option, ok := e.(*proto.Option)
+		if !ok {
+			// Not an option
+			continue
+		}
+
+		// method options can be wrapped in parentheses so we trim them away
+		if strings.Trim(option.Name, "()") != "idempotency_level" {
+			// Not an idempotency option
+			continue
+		}
+
+		return option.Constant.Source == "IDEMPOTENT" ||
+			option.Constant.Source == "NO_SIDE_EFFECTS"
+	}
+
+	return false
 }

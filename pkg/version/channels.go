@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"net"
 	"net/http"
+
+	"github.com/linkerd/linkerd2/pkg/util"
 )
 
 // Channels provides an interface to interact with a set of release channels.
@@ -16,8 +18,9 @@ type Channels struct {
 	array []channelVersion
 }
 
-const (
-	versionCheckURL = "https://versioncheck.linkerd.io/version.json?version=%s&uuid=%s&source=%s"
+var (
+	// CheckURL provides an online endpoint for Linkerd's version checks
+	CheckURL = "https://versioncheck.linkerd.io/version.json"
 )
 
 // NewChannels is used primarily for testing, it returns a Channels struct that
@@ -42,13 +45,17 @@ func (c Channels) Match(actualVersion string) error {
 		return errors.New("actual version is empty")
 	}
 
+	if c.Empty() {
+		return errors.New("unable to determine version channel")
+	}
+
 	actual, err := parseChannelVersion(actualVersion)
 	if err != nil {
-		return fmt.Errorf("failed to parse actual version: %s", err)
+		return fmt.Errorf("failed to parse actual version: %w", err)
 	}
 
 	for _, cv := range c.array {
-		if cv.channel == actual.channel {
+		if cv.updateChannel() == actual.updateChannel() {
 			return match(cv.String(), actualVersion)
 		}
 	}
@@ -56,14 +63,19 @@ func (c Channels) Match(actualVersion string) error {
 	return fmt.Errorf("unsupported version channel: %s", actualVersion)
 }
 
+// Determines whether there are any release channels stored in the struct.
+func (c Channels) Empty() bool {
+	return len(c.array) == 0
+}
+
 // GetLatestVersions performs an online request to check for the latest Linkerd
 // release channels.
 func GetLatestVersions(ctx context.Context, uuid string, source string) (Channels, error) {
-	url := fmt.Sprintf(versionCheckURL, Version, uuid, source)
-	return getLatestVersions(ctx, http.DefaultClient, url, uuid, source)
+	url := fmt.Sprintf("%s?version=%s&uuid=%s&source=%s", CheckURL, Version, uuid, source)
+	return getLatestVersions(ctx, http.DefaultClient, url)
 }
 
-func getLatestVersions(ctx context.Context, client *http.Client, url string, uuid string, source string) (Channels, error) {
+func getLatestVersions(ctx context.Context, client *http.Client, url string) (Channels, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return Channels{}, err
@@ -71,6 +83,10 @@ func getLatestVersions(ctx context.Context, client *http.Client, url string, uui
 
 	rsp, err := client.Do(req.WithContext(ctx))
 	if err != nil {
+		var dnsError *net.DNSError
+		if errors.As(err, &dnsError) {
+			return Channels{}, fmt.Errorf("failed to resolve version check server: %s", url)
+		}
 		return Channels{}, err
 	}
 	defer rsp.Body.Close()
@@ -79,7 +95,7 @@ func getLatestVersions(ctx context.Context, client *http.Client, url string, uui
 		return Channels{}, fmt.Errorf("unexpected versioncheck response: %s", rsp.Status)
 	}
 
-	bytes, err := ioutil.ReadAll(rsp.Body)
+	bytes, err := util.ReadAllLimit(rsp.Body, util.MB)
 	if err != nil {
 		return Channels{}, err
 	}
@@ -94,10 +110,10 @@ func getLatestVersions(ctx context.Context, client *http.Client, url string, uui
 	for c, v := range versionRsp {
 		cv, err := parseChannelVersion(v)
 		if err != nil {
-			return Channels{}, fmt.Errorf("unexpected versioncheck response: %s", err)
+			return Channels{}, fmt.Errorf("unexpected versioncheck response: %w", err)
 		}
 
-		if c != cv.channel {
+		if c != cv.updateChannel() {
 			return Channels{}, fmt.Errorf("unexpected versioncheck response: channel in %s does not match %s", cv, c)
 		}
 

@@ -1,8 +1,6 @@
----
-apiVersion: apps/v1beta1
+apiVersion: apps/v1
 kind: Deployment
 metadata:
-  creationTimestamp: null
   name: web
   namespace: emojivoto
 spec:
@@ -10,10 +8,8 @@ spec:
   selector:
     matchLabels:
       app: web-svc
-  strategy: {}
   template:
     metadata:
-      creationTimestamp: null
       labels:
         app: web-svc
     spec:
@@ -27,10 +23,9 @@ spec:
           value: voting-svc.emojivoto:8080
         - name: INDEX_BUNDLE
           value: dist/index_bundle.js
-        image: buoyantio/emojivoto-web:v3
+        image: buoyantio/emojivoto-web:v10
         name: web-svc
         ports:
         - containerPort: 80
           name: http
-        resources: {}
-status: {}
+---

@@ -1,8 +1,10 @@
 import deployRollupFixtures from '../../../test/fixtures/deployRollup.json';
 import multiDeployRollupFixtures from '../../../test/fixtures/multiDeployRollup.json';
 import multiResourceRollupFixtures from '../../../test/fixtures/allRollup.json';
+import gatewayFixtures from '../../../test/fixtures/gateway.json';
 import Percentage from './Percentage';
 import {
+  processGatewayResults,
   processMultiResourceRollup,
   processSingleResourceRollup
 } from './MetricUtils.jsx';
@@ -19,20 +21,25 @@ describe('MetricUtils', () => {
           key: "emojivoto-deployment-voting",
           requestRate: 2.5,
           successRate: 0.9,
+          tcp: {
+            openConnections: 221,
+            readBytes: 4421,
+            writeBytes: 4421,
+            readRate: 73.68333333333334,
+            writeRate: 73.68333333333334
+          },
           totalRequests: 150,
-          tlsRequestPercent: new Percentage(100, 150),
           latency: {
             P50: 1,
             P95: 2,
             P99: 7
           },
-          pods: {totalPods: "1", meshedPods: "1", meshedPercentage: new Percentage(1,1)},
+          pods: { totalPods: "1", meshedPods: "1", meshedPercentage: new Percentage(1, 1) },
           added: true,
           errors: {}
         }
       ];
       expect(result).toHaveLength(1);
-      expect(result[0].tlsRequestPercent.prettyRate()).toEqual("66.7%");
       expect(result).toEqual(expectedResult);
     });
 
@@ -60,4 +67,31 @@ describe('MetricUtils', () => {
       expect(result["replicationcontroller"]).toBeUndefined;
     });
   });
+  describe('processGatewayResults', () => {
+    it('Extracts and sorts gateway metrics from a response', () => {
+      let result = processGatewayResults(gatewayFixtures);
+      let expectedResult = [
+        {
+          key: 'test_namespace-gateway-default_gateway',
+          name: 'default_gateway',
+          namespace: 'test_namespace',
+          clusterName: 'multi_cluster',
+          alive: true,
+          pairedServices: '0',
+          latency: { P50: 0, P95: 0, P99: 0 }
+        },
+        {
+          key: 'test_namespace-gateway-test_gateway',
+          name: 'test_gateway',
+          namespace: 'test_namespace',
+          clusterName: 'multi_cluster',
+          alive: true,
+          pairedServices: '0',
+          latency: { P50: 0, P95: 0, P99: 0 }
+        }
+      ];
+      expect(result).toHaveLength(2);
+      expect(result).toEqual(expectedResult);
+    });
+  })
 });

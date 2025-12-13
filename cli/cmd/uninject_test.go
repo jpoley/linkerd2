@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"io"
 	"os"
-	"strings"
 	"testing"
+
+	charts "github.com/linkerd/linkerd2/pkg/charts/linkerd2"
 )
 
 // TestUninjectYAML does the reverse of TestInjectYAML.
@@ -14,14 +16,19 @@ import (
 func TestUninjectYAML(t *testing.T) {
 
 	testCases := []struct {
-		inputFileName     string
-		goldenFileName    string
-		reportFileName    string
-		testInjectOptions *injectOptions
+		inputFileName  string
+		goldenFileName string
+		reportFileName string
 	}{
 		{
 			inputFileName:  "inject_emojivoto_deployment.golden.yml",
 			goldenFileName: "inject_emojivoto_deployment.input.yml",
+			reportFileName: "inject_emojivoto_deployment_uninject.report",
+		},
+		{
+			// remove all the linkerd.io/* annotations
+			inputFileName:  "inject_emojivoto_deployment_overridden_noinject.golden.yml",
+			goldenFileName: "inject_emojivoto_deployment_uninjected.input.yml",
 			reportFileName: "inject_emojivoto_deployment_uninject.report",
 		},
 		{
@@ -55,17 +62,7 @@ func TestUninjectYAML(t *testing.T) {
 			reportFileName: "inject_emojivoto_pod_uninject.report",
 		},
 		{
-			inputFileName:  "inject_emojivoto_pod_with_requests.golden.yml",
-			goldenFileName: "inject_emojivoto_pod_with_requests.input.yml",
-			reportFileName: "inject_emojivoto_pod_with_requests_uninject.report",
-		},
-		{
-			inputFileName:  "inject_emojivoto_deployment_tls.golden.yml",
-			goldenFileName: "inject_emojivoto_deployment.input.yml",
-			reportFileName: "inject_emojivoto_deployment_uninject.report",
-		},
-		{
-			inputFileName:  "inject_emojivoto_pod_tls.golden.yml",
+			inputFileName:  "inject_emojivoto_pod_nativesidecar.golden.yml",
 			goldenFileName: "inject_emojivoto_pod.input.yml",
 			reportFileName: "inject_emojivoto_pod_uninject.report",
 		},
@@ -80,46 +77,54 @@ func TestUninjectYAML(t *testing.T) {
 			reportFileName: "inject_emojivoto_istio_uninject.report",
 		},
 		{
-			inputFileName:  "inject_contour.input.yml",
+			inputFileName:  "inject_contour.golden.yml",
 			goldenFileName: "inject_contour.input.yml",
 			reportFileName: "inject_contour_uninject.report",
 		},
+		{
+			inputFileName:  "inject_emojivoto_deployment_config_overrides.golden.yml",
+			goldenFileName: "inject_emojivoto_deployment_config_overrides.input.yml",
+			reportFileName: "inject_emojivoto_deployment_uninject.report",
+		},
+		{
+			inputFileName:  "inject_emojivoto_namespace_good.golden.yml",
+			goldenFileName: "inject_emojivoto_namespace_uninjected_good.golden.yml",
+			reportFileName: "inject_emojivoto_namespace_uninjected_good.golden.report",
+		},
+		{
+			inputFileName:  "inject_emojivoto_namespace_overidden_good.golden.yml",
+			goldenFileName: "inject_emojivoto_namespace_uninjected_good.golden.yml",
+			reportFileName: "inject_emojivoto_namespace_uninjected_good.golden.report",
+		},
+	}
+
+	values, err := charts.NewValues()
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	for i, tc := range testCases {
+		tc := tc // pin
 		t.Run(fmt.Sprintf("%d: %s", i, tc.inputFileName), func(t *testing.T) {
 			file, err := os.Open("testdata/" + tc.inputFileName)
 			if err != nil {
 				t.Errorf("error opening test input file: %v\n", err)
 			}
 
-			read := bufio.NewReader(file)
+			read := []io.Reader{bufio.NewReader(file)}
 
 			output := new(bytes.Buffer)
 			report := new(bytes.Buffer)
 
-			err = UninjectYAML(read, output, report, nil)
-			if err != nil {
-				t.Errorf("Unexpected error uninjecting YAML: %v\n", err)
+			exitCode := runUninjectCmd(read, report, output, values, "yaml")
+			if exitCode != 0 {
+				t.Errorf("Failed to uninject %s", tc.inputFileName)
 			}
 
-			actualOutput := stripDashes(output.String())
-			expectedOutput := stripDashes(readOptionalTestFile(t, tc.goldenFileName))
-			if expectedOutput != actualOutput {
-				t.Errorf("Result mismatch.\nExpected: %s\nActual: %s", expectedOutput, actualOutput)
+			if err := testDataDiffer.DiffTestYAML(tc.goldenFileName, output.String()); err != nil {
+				t.Error(err)
 			}
-
-			actualReport := report.String()
-			expectedReport := readOptionalTestFile(t, tc.reportFileName)
-			if expectedReport != actualReport {
-				t.Errorf("Result mismatch.\nExpected: %s\nActual: %s", expectedReport, actualReport)
-			}
+			testDataDiffer.DiffTestdata(t, tc.reportFileName, report.String())
 		})
 	}
-}
-
-// stripDashes removes the YAML dashes (---) found at the beginning and ending of the
-// input and golden files respectively.
-func stripDashes(str string) string {
-	return strings.Trim(str, "-\n")
 }

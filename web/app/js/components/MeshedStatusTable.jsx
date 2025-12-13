@@ -1,56 +1,55 @@
-import BaseTable from './BaseTable.jsx';
-import ErrorModal from './ErrorModal.jsx';
 import Grid from '@material-ui/core/Grid';
 import PropTypes from 'prop-types';
 import React from 'react';
-import { StyledProgress } from './util/Progress.jsx';
 import Tooltip from '@material-ui/core/Tooltip';
+import { Trans } from '@lingui/macro';
 import _isEmpty from 'lodash/isEmpty';
+import { StyledProgress } from './util/Progress.jsx';
+import ErrorModal from './ErrorModal.jsx';
+import BaseTable from './BaseTable.jsx';
 import { withContext } from './util/AppContext.jsx';
 
 const getClassification = (meshedPodCount, failedPodCount) => {
   if (failedPodCount > 0) {
-    return "poor";
+    return 'poor';
   } else if (meshedPodCount === 0) {
-    return "default";
+    return 'default';
   } else {
-    return "good";
+    return 'good';
   }
 };
 
 const namespacesColumns = PrefixedLink => [
   {
-    title: "Namespace",
-    dataIndex: "namespace",
-    sorter: (a, b) => a.namespace.localeCompare(b.namespace),
+    title: <Trans>columnTitleNamespace</Trans>,
+    dataIndex: 'namespace',
+    sorter: d => d.namespace,
     render: d => {
-      return  (
-        <React.Fragment>
-          <Grid container alignItems="center" spacing={8}>
-            <Grid item><PrefixedLink to={"/namespaces/" + d.namespace}>{d.namespace}</PrefixedLink></Grid>
-            { _isEmpty(d.errors) ? null :
-            <Grid item><ErrorModal errors={d.errors} resourceName={d.namespace} resourceType="namespace" /></Grid>
+      return (
+        <Grid container alignItems="center" spacing={1}>
+          <Grid item><PrefixedLink to={`/namespaces/${d.namespace}`}>{d.namespace}</PrefixedLink></Grid>
+          { _isEmpty(d.errors) ? null :
+          <Grid item><ErrorModal errors={d.errors} resourceName={d.namespace} resourceType="namespace" /></Grid>
           }
-          </Grid>
-        </React.Fragment>
+        </Grid>
       );
-    }
+    },
   },
   {
-    title: "Meshed pods",
-    dataIndex: "meshedPodsStr",
-    isNumeric: true
+    title: <Trans>columnTitleMeshedPods</Trans>,
+    dataIndex: 'meshedPodsStr',
+    isNumeric: true,
   },
   {
-    title: "Meshed Status",
-    key: "meshification",
+    title: <Trans>columnTitleMeshedStatus</Trans>,
+    key: 'meshification',
     render: row => {
-      let percent = row.meshedPercent.get();
-      let barType = _isEmpty(row.errors) ?
-        getClassification(row.meshedPods, row.failedPods) : "warning";
-      let Progress = StyledProgress(barType);
+      const percent = row.meshedPercent.get();
+      const barType = _isEmpty(row.errors) ?
+        getClassification(row.meshedPods, row.failedPods) : 'warning';
+      const Progress = StyledProgress(barType);
 
-      let percentMeshedMsg = "";
+      let percentMeshedMsg = '';
       if (row.meshedPercent.get() >= 0) {
         percentMeshedMsg = `(${row.meshedPercent.prettyRate()})`;
       }
@@ -67,32 +66,30 @@ const namespacesColumns = PrefixedLink => [
           <Progress variant="determinate" value={Math.round(percent * 100)} />
         </Tooltip>
       );
-    }
-  }
+    },
+  },
 ];
 
-class MeshedStatusTable extends React.Component {
-  render() {
-    return (
-      <BaseTable
-        tableClassName="metric-table mesh-completion-table"
-        tableRows={this.props.tableRows}
-        tableColumns={namespacesColumns(this.props.api.PrefixedLink)}
-        defaultOrderBy="namespace"
-        rowKey={d => d.namespace} />
-    );
-  }
-}
+const MeshedStatusTable = function({ api, tableRows }) {
+  return (
+    <BaseTable
+      tableClassName="metric-table mesh-completion-table"
+      tableRows={tableRows}
+      tableColumns={namespacesColumns(api.PrefixedLink)}
+      defaultOrderBy="namespace"
+      rowKey={d => d.namespace} />
+  );
+};
 
 MeshedStatusTable.propTypes = {
   api: PropTypes.shape({
-    PrefixedLink: PropTypes.func.isRequired
+    PrefixedLink: PropTypes.func.isRequired,
   }).isRequired,
-  tableRows: PropTypes.arrayOf(PropTypes.shape({}))
+  tableRows: PropTypes.arrayOf(PropTypes.shape({})),
 };
 
 MeshedStatusTable.defaultProps = {
-  tableRows: []
+  tableRows: [],
 };
 
 export default withContext(MeshedStatusTable);

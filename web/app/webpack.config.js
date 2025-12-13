@@ -1,10 +1,10 @@
 /* global require, module, __dirname */
 
 const path = require('path');
-const CleanWebpackPlugin = require('clean-webpack-plugin');
+const { CleanWebpackPlugin } = require('clean-webpack-plugin');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 const LodashModuleReplacementPlugin = require('lodash-webpack-plugin');
-const WebpackMvPlugin = require('./webpack-mv-plugin.js');
+const ESLintPlugin = require('eslint-webpack-plugin');
 
 // uncomment here and in plugins to analyze webpack bundle size
 // const BundleAnalyzerPlugin = require('webpack-bundle-analyzer').BundleAnalyzerPlugin;
@@ -13,7 +13,9 @@ module.exports = {
   mode: process.env.NODE_ENV === 'production' ? 'production' : 'development',
   entry: './js/index.js',
   devServer: {
-    writeToDisk: true
+    devMiddleware: {
+      writeToDisk: true
+    }
   },
   output: {
     path: path.resolve(__dirname, 'dist'),
@@ -33,22 +35,13 @@ module.exports = {
       {
         test: /\.jsx?$/,
         exclude: /node_modules/,
-        use: [
-          'babel-loader',
-          {
-            loader: 'eslint-loader',
-            options: {
-              fix: process.env.NODE_ENV === 'development',
-              emitWarning: process.env.NODE_ENV === 'development'
-            }
-          }
-        ]
+        use: ['babel-loader']
       },
       {
         test: /\.css$/,
         use: [
           'style-loader',
-          { loader: 'css-loader', options: { importLoaders: 1, minimize: true } },
+          { loader: 'css-loader', options: { importLoaders: 1 } },
         ]
       },
       {
@@ -66,19 +59,31 @@ module.exports = {
   },
   plugins: [
     // new BundleAnalyzerPlugin(), // uncomment to analyze bundle size
-    new CleanWebpackPlugin(['dist']),
+    new ESLintPlugin({
+      extensions: ['.jsx', '.js'],
+      fix: process.env.NODE_ENV === 'development',
+      emitWarning: process.env.NODE_ENV === 'development',
+      files: ['js', 'test']
+    }),
+    new CleanWebpackPlugin({
+      protectWebpackAssets: false
+    }),
     new LodashModuleReplacementPlugin({
       // 'chain': true,
       'collections': true,
-      'paths': true
+      'paths': true,
+      'shorthands': true
     }),
-    // compile the bundle with hashed filename into index_bundle.js.out
+    // compile the bundle with hashed filename into index_bundle.js
     new HtmlWebpackPlugin({
+      cache: false,
       inject: false,
-      filename: "index_bundle.js.out",
+      filename: 'index_bundle.js',
       template: 'index_bundle.js.lodash.tmpl',
-    }),
-    // move /dist/index_bundle.js.out to /dist/index_bundle.js
-    new WebpackMvPlugin()
-  ]
+      // this is important! Production builds minimize the template, causing
+      // the comment on the first line to be for the entire file and then
+      // nothing loads.
+      minify: false
+    })
+  ],
 };

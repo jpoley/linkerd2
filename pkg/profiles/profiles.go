@@ -6,313 +6,41 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"regexp"
 	"text/template"
 	"time"
 
-	"github.com/golang/protobuf/ptypes/duration"
-	pb "github.com/linkerd/linkerd2-proxy-api/go/destination"
-	sp "github.com/linkerd/linkerd2/controller/gen/apis/serviceprofile/v1alpha1"
-	"github.com/linkerd/linkerd2/pkg/util"
-	log "github.com/sirupsen/logrus"
-	meta_v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	sp "github.com/linkerd/linkerd2/controller/gen/apis/serviceprofile/v1alpha2" // TODO: pkg/profiles should not depend on controller/gen
+	pkgcmd "github.com/linkerd/linkerd2/pkg/cmd"
+	"github.com/linkerd/linkerd2/pkg/k8s"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
+	yamlDecoder "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
 )
+
+var pathParamRegex = regexp.MustCompile(`\\{[^\}]*\\}`)
 
 type profileTemplateConfig struct {
 	ServiceNamespace string
 	ServiceName      string
-	ClusterZone      string
+	ClusterDomain    string
 }
 
 var (
-	// DefaultRetryBudget is used for routes which do not specify one.
-	DefaultRetryBudget = pb.RetryBudget{
-		MinRetriesPerSecond: 10,
-		RetryRatio:          0.2,
-		Ttl: &duration.Duration{
-			Seconds: 10,
-		},
-	}
 	// ServiceProfileMeta is the TypeMeta for the ServiceProfile custom resource.
-	ServiceProfileMeta = meta_v1.TypeMeta{
-		APIVersion: "linkerd.io/v1alpha1",
-		Kind:       "ServiceProfile",
+	ServiceProfileMeta = metav1.TypeMeta{
+		APIVersion: k8s.ServiceProfileAPIVersion,
+		Kind:       k8s.ServiceProfileKind,
 	}
-	// DefaultServiceProfile is used for services with no service profile.
-	DefaultServiceProfile = pb.DestinationProfile{
-		Routes:      []*pb.Route{},
-		RetryBudget: &DefaultRetryBudget,
-	}
-	// DefaultRouteTimeout is the default timeout for routes that do not specify
-	// one.
-	DefaultRouteTimeout = 10 * time.Second
 
 	minStatus uint32 = 100
 	maxStatus uint32 = 599
 
-	clusterZoneSuffix = "svc.cluster.local"
-
 	errRequestMatchField  = errors.New("A request match must have a field set")
 	errResponseMatchField = errors.New("A response match must have a field set")
 )
-
-func toDuration(d time.Duration) *duration.Duration {
-	return &duration.Duration{
-		Seconds: int64(d / time.Second),
-		Nanos:   int32(d % time.Second),
-	}
-}
-
-// ToServiceProfile returns a Proxy API DestinationProfile, given a
-// ServiceProfile.
-func ToServiceProfile(profile *sp.ServiceProfileSpec) (*pb.DestinationProfile, error) {
-	routes := make([]*pb.Route, 0)
-	for _, route := range profile.Routes {
-		pbRoute, err := ToRoute(route)
-		if err != nil {
-			return nil, err
-		}
-		routes = append(routes, pbRoute)
-	}
-	budget := DefaultRetryBudget
-	if profile.RetryBudget != nil {
-		budget.MinRetriesPerSecond = profile.RetryBudget.MinRetriesPerSecond
-		budget.RetryRatio = profile.RetryBudget.RetryRatio
-		ttl, err := time.ParseDuration(profile.RetryBudget.TTL)
-		if err != nil {
-			return nil, err
-		}
-		budget.Ttl = toDuration(ttl)
-	}
-	return &pb.DestinationProfile{
-		Routes:      routes,
-		RetryBudget: &budget,
-	}, nil
-}
-
-// ToRoute returns a Proxy API Route, given a ServiceProfile Route.
-func ToRoute(route *sp.RouteSpec) (*pb.Route, error) {
-	cond, err := ToRequestMatch(route.Condition)
-	if err != nil {
-		return nil, err
-	}
-	rcs := make([]*pb.ResponseClass, 0)
-	for _, rc := range route.ResponseClasses {
-		pbRc, err := ToResponseClass(rc)
-		if err != nil {
-			return nil, err
-		}
-		rcs = append(rcs, pbRc)
-	}
-	timeout, err := time.ParseDuration(route.Timeout)
-	if err != nil {
-		log.Errorf("failed to parse duration for route %s: %s", route.Name, err)
-		timeout = DefaultRouteTimeout
-	}
-	ret := pb.Route{
-		Condition:       cond,
-		ResponseClasses: rcs,
-		MetricsLabels:   map[string]string{"route": route.Name},
-		IsRetryable:     route.IsRetryable,
-		Timeout:         toDuration(timeout),
-	}
-	return &ret, nil
-}
-
-// ToResponseClass returns a Proxy API ResponseClass, given a ServiceProfile
-// ResponseClass.
-func ToResponseClass(rc *sp.ResponseClass) (*pb.ResponseClass, error) {
-	cond, err := ToResponseMatch(rc.Condition)
-	if err != nil {
-		return nil, err
-	}
-	return &pb.ResponseClass{
-		Condition: cond,
-		IsFailure: rc.IsFailure,
-	}, nil
-}
-
-// ToResponseMatch returns a Proxy API ResponseMatch, given a ServiceProfile
-// ResponseMatch.
-func ToResponseMatch(rspMatch *sp.ResponseMatch) (*pb.ResponseMatch, error) {
-	if rspMatch == nil {
-		return nil, errors.New("missing response match")
-	}
-	err := ValidateResponseMatch(rspMatch)
-	if err != nil {
-		return nil, err
-	}
-
-	matches := make([]*pb.ResponseMatch, 0)
-
-	if rspMatch.All != nil {
-		all := make([]*pb.ResponseMatch, 0)
-		for _, m := range rspMatch.All {
-			pbM, err := ToResponseMatch(m)
-			if err != nil {
-				return nil, err
-			}
-			all = append(all, pbM)
-		}
-		matches = append(matches, &pb.ResponseMatch{
-			Match: &pb.ResponseMatch_All{
-				All: &pb.ResponseMatch_Seq{
-					Matches: all,
-				},
-			},
-		})
-	}
-
-	if rspMatch.Any != nil {
-		any := make([]*pb.ResponseMatch, 0)
-		for _, m := range rspMatch.Any {
-			pbM, err := ToResponseMatch(m)
-			if err != nil {
-				return nil, err
-			}
-			any = append(any, pbM)
-		}
-		matches = append(matches, &pb.ResponseMatch{
-			Match: &pb.ResponseMatch_Any{
-				Any: &pb.ResponseMatch_Seq{
-					Matches: any,
-				},
-			},
-		})
-	}
-
-	if rspMatch.Status != nil {
-		matches = append(matches, &pb.ResponseMatch{
-			Match: &pb.ResponseMatch_Status{
-				Status: &pb.HttpStatusRange{
-					Max: rspMatch.Status.Max,
-					Min: rspMatch.Status.Min,
-				},
-			},
-		})
-	}
-
-	if rspMatch.Not != nil {
-		not, err := ToResponseMatch(rspMatch.Not)
-		if err != nil {
-			return nil, err
-		}
-		matches = append(matches, &pb.ResponseMatch{
-			Match: &pb.ResponseMatch_Not{
-				Not: not,
-			},
-		})
-	}
-
-	if len(matches) == 0 {
-		return nil, errResponseMatchField
-	}
-	if len(matches) == 1 {
-		return matches[0], nil
-	}
-	return &pb.ResponseMatch{
-		Match: &pb.ResponseMatch_All{
-			All: &pb.ResponseMatch_Seq{
-				Matches: matches,
-			},
-		},
-	}, nil
-}
-
-// ToRequestMatch returns a Proxy API RequestMatch, given a ServiceProfile
-// RequestMatch.
-func ToRequestMatch(reqMatch *sp.RequestMatch) (*pb.RequestMatch, error) {
-	if reqMatch == nil {
-		return nil, errors.New("missing request match")
-	}
-	err := ValidateRequestMatch(reqMatch)
-	if err != nil {
-		return nil, err
-	}
-
-	matches := make([]*pb.RequestMatch, 0)
-
-	if reqMatch.All != nil {
-		all := make([]*pb.RequestMatch, 0)
-		for _, m := range reqMatch.All {
-			pbM, err := ToRequestMatch(m)
-			if err != nil {
-				return nil, err
-			}
-			all = append(all, pbM)
-		}
-		matches = append(matches, &pb.RequestMatch{
-			Match: &pb.RequestMatch_All{
-				All: &pb.RequestMatch_Seq{
-					Matches: all,
-				},
-			},
-		})
-	}
-
-	if reqMatch.Any != nil {
-		any := make([]*pb.RequestMatch, 0)
-		for _, m := range reqMatch.Any {
-			pbM, err := ToRequestMatch(m)
-			if err != nil {
-				return nil, err
-			}
-			any = append(any, pbM)
-		}
-		matches = append(matches, &pb.RequestMatch{
-			Match: &pb.RequestMatch_Any{
-				Any: &pb.RequestMatch_Seq{
-					Matches: any,
-				},
-			},
-		})
-	}
-
-	if reqMatch.Method != "" {
-		matches = append(matches, &pb.RequestMatch{
-			Match: &pb.RequestMatch_Method{
-				Method: util.ParseMethod(reqMatch.Method),
-			},
-		})
-	}
-
-	if reqMatch.Not != nil {
-		not, err := ToRequestMatch(reqMatch.Not)
-		if err != nil {
-			return nil, err
-		}
-		matches = append(matches, &pb.RequestMatch{
-			Match: &pb.RequestMatch_Not{
-				Not: not,
-			},
-		})
-	}
-
-	if reqMatch.PathRegex != "" {
-		matches = append(matches, &pb.RequestMatch{
-			Match: &pb.RequestMatch_Path{
-				Path: &pb.PathMatch{
-					Regex: reqMatch.PathRegex,
-				},
-			},
-		})
-	}
-
-	if len(matches) == 0 {
-		return nil, errRequestMatchField
-	}
-	if len(matches) == 1 {
-		return matches[0], nil
-	}
-	return &pb.RequestMatch{
-		Match: &pb.RequestMatch_All{
-			All: &pb.RequestMatch_Seq{
-				Matches: matches,
-			},
-		},
-	}, nil
-}
 
 // Validate validates the structure of a ServiceProfile. This code is a superset
 // of the validation provided by the `openAPIV3Schema`, defined in the
@@ -327,44 +55,40 @@ func ToRequestMatch(reqMatch *sp.RequestMatch) (*pb.RequestMatch, error) {
 // - recursive fields
 func Validate(data []byte) error {
 	var serviceProfile sp.ServiceProfile
-	err := yaml.UnmarshalStrict([]byte(data), &serviceProfile)
+	err := yaml.UnmarshalStrict(data, &serviceProfile)
 	if err != nil {
-		return fmt.Errorf("failed to validate ServiceProfile: %s", err)
+		return fmt.Errorf("failed to validate ServiceProfile: %w", err)
 	}
 
 	errs := validation.IsDNS1123Subdomain(serviceProfile.Name)
 	if len(errs) > 0 {
-		return fmt.Errorf("ServiceProfile \"%s\" has invalid name: %s", serviceProfile.Name, errs[0])
-	}
-
-	if len(serviceProfile.Spec.Routes) == 0 {
-		return fmt.Errorf("ServiceProfile \"%s\" has no routes", serviceProfile.Name)
+		return fmt.Errorf("ServiceProfile %q has invalid name: %s", serviceProfile.Name, errs[0])
 	}
 
 	for _, route := range serviceProfile.Spec.Routes {
 		if route.Name == "" {
-			return fmt.Errorf("ServiceProfile \"%s\" has a route with no name", serviceProfile.Name)
+			return fmt.Errorf("ServiceProfile %q has a route with no name", serviceProfile.Name)
 		}
 		if route.Timeout != "" {
 			_, err := time.ParseDuration(route.Timeout)
 			if err != nil {
-				return fmt.Errorf("ServiceProfile \"%s\" has a route with an invalid timeout: %s", serviceProfile.Name, err)
+				return fmt.Errorf("ServiceProfile %q has a route with an invalid timeout: %w", serviceProfile.Name, err)
 			}
 		}
 		if route.Condition == nil {
-			return fmt.Errorf("ServiceProfile \"%s\" has a route with no condition", serviceProfile.Name)
+			return fmt.Errorf("ServiceProfile %q has a route with no condition", serviceProfile.Name)
 		}
 		err := ValidateRequestMatch(route.Condition)
 		if err != nil {
-			return fmt.Errorf("ServiceProfile \"%s\" has a route with an invalid condition: %s", serviceProfile.Name, err)
+			return fmt.Errorf("ServiceProfile %q has a route with an invalid condition: %w", serviceProfile.Name, err)
 		}
 		for _, rc := range route.ResponseClasses {
 			if rc.Condition == nil {
-				return fmt.Errorf("ServiceProfile \"%s\" has a response class with no condition", serviceProfile.Name)
+				return fmt.Errorf("ServiceProfile %q has a response class with no condition", serviceProfile.Name)
 			}
 			err = ValidateResponseMatch(rc.Condition)
 			if err != nil {
-				return fmt.Errorf("ServiceProfile \"%s\" has a response class with an invalid condition: %s", serviceProfile.Name, err)
+				return fmt.Errorf("ServiceProfile %q has a response class with an invalid condition: %w", serviceProfile.Name, err)
 			}
 		}
 	}
@@ -372,16 +96,16 @@ func Validate(data []byte) error {
 	rb := serviceProfile.Spec.RetryBudget
 	if rb != nil {
 		if rb.RetryRatio < 0 {
-			return fmt.Errorf("ServiceProfile \"%s\" RetryBudget RetryRatio must be non-negative: %f", serviceProfile.Name, rb.RetryRatio)
+			return fmt.Errorf("ServiceProfile %q RetryBudget RetryRatio must be non-negative: %f", serviceProfile.Name, rb.RetryRatio)
 		}
 
 		if rb.TTL == "" {
-			return fmt.Errorf("ServiceProfile \"%s\" RetryBudget missing TTL field", serviceProfile.Name)
+			return fmt.Errorf("ServiceProfile %q RetryBudget missing TTL field", serviceProfile.Name)
 		}
 
 		_, err := time.ParseDuration(rb.TTL)
 		if err != nil {
-			return fmt.Errorf("ServiceProfile \"%s\" RetryBudget: %s", serviceProfile.Name, err)
+			return fmt.Errorf("ServiceProfile %q RetryBudget: %w", serviceProfile.Name, err)
 		}
 	}
 
@@ -478,18 +202,18 @@ func ValidateResponseMatch(rspMatch *sp.ResponseMatch) error {
 	return nil
 }
 
-func buildConfig(namespace, service string) *profileTemplateConfig {
+func buildConfig(namespace, service, clusterDomain string) *profileTemplateConfig {
 	return &profileTemplateConfig{
 		ServiceNamespace: namespace,
 		ServiceName:      service,
-		ClusterZone:      clusterZoneSuffix,
+		ClusterDomain:    clusterDomain,
 	}
 }
 
 // RenderProfileTemplate renders a ServiceProfile template to a buffer, given a
 // namespace, service, and control plane namespace.
-func RenderProfileTemplate(namespace, service string, w io.Writer) error {
-	config := buildConfig(namespace, service)
+func RenderProfileTemplate(namespace, service, clusterDomain string, w io.Writer, format string) error {
+	config := buildConfig(namespace, service, clusterDomain)
 	template, err := template.New("profile").Parse(Template)
 	if err != nil {
 		return err
@@ -500,22 +224,31 @@ func RenderProfileTemplate(namespace, service string, w io.Writer) error {
 		return err
 	}
 
-	_, err = w.Write(buf.Bytes())
-	return err
+	if format == pkgcmd.JsonOutput {
+		bytes, err := yamlDecoder.ToJSON(buf.Bytes())
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(append(bytes, '\n'))
+		return err
+	}
+	if format == pkgcmd.YamlOutput {
+		_, err = w.Write(buf.Bytes())
+		return err
+	}
+
+	return fmt.Errorf("unknown output format: %s", format)
 }
 
 func readFile(fileName string) (io.Reader, error) {
 	if fileName == "-" {
 		return os.Stdin, nil
 	}
-	return os.Open(fileName)
+	return os.Open(filepath.Clean(fileName))
 }
 
-func writeProfile(profile sp.ServiceProfile, w io.Writer) error {
-	output, err := yaml.Marshal(profile)
-	if err != nil {
-		return fmt.Errorf("Error writing Service Profile: %s", err)
-	}
-	_, err = w.Write(output)
-	return err
+// PathToRegex converts a path into a regex.
+func PathToRegex(path string) string {
+	escaped := regexp.QuoteMeta(path)
+	return pathParamRegex.ReplaceAllLiteralString(escaped, "[^/]*")
 }

@@ -2,47 +2,76 @@
 
 This document defines project governance for Linkerd.
 
-## Roles
+> The Linkerd maintainers are 100% committed to open governance and to being
+> hosted by a neutral foundation. We believe that a diverse and active set of
+> maintainers is fundamental to the long-term health of an open source project.
+> And we want YOU to join us.
 
-There are two roles that convey decision-making powers: maintainer and
-super-maintainer. MAINTAINERS.md defines the membership of these roles.
+&mdash; [Linkerd's Commitment to Open
+Governance](https://linkerd.io/2019/10/03/linkerds-commitment-to-open-governance/)
 
-## Expectations
+## Contributors
 
-Maintainers are responsible for one or more components, and are expected to
-contribute code, field incoming PRs, triage issues, proactively fix bugs, and
-generally perform maintainance tasks for these components.
+Linkerd is for everyone. Anyone can become a Linkerd contributor simply by
+contributing to the project, whether through code, documentation, blog posts,
+community management, or other means. As with all Linkerd community members,
+contributors are expected to follow the [Linkerd Code of
+Conduct][coc].
 
-Super-maintainers are responsible for the project as a whole, and are expected
-to guide general project direction as well as being the final reviewer on PRs.
+All contributions to Linkerd code, documentation, or other components in the
+Linkerd GitHub org must follow the guidelines in [CONTRIBUTING.md][contrib].
+Whether these contributions are merged into the project is the prerogative of
+the maintainers.
 
-## Decisionmaking
+## Directors
 
-Ideally, all project decisions are resolved by consensus. If this is not
-possible, maintainers may call a vote. Unless otherwise specified in this
-document, the vote will be decided by a simple majority in which each
-super-maintainer receives two votes and each maintainer receives one vote.
+Directors are responsible for non-technical leadership functions within the
+project. This includes representing Linkerd and its maintainers to the
+community, to press, and to the outside world; interfacing with CNCF and other
+governance entities; and participating in project decision-making processes when
+appropriate.
 
-## Changes in Maintainership
+Directors may be elected by a majority vote of the maintainers.
 
-New maintainers must be proposed by an existing maintainer and must be elected
-by a 2/3 majority organization vote. Maintainers can be removed by a 2/3
-majority organization vote.
+## Maintainers
 
-Super-maintainers must be proposed by an existing super-maintainer and must be
-elected by a 2/3 majority organization vote. Super-maintainers can be removed
-by a 2/3 majority organization vote.
+Maintainers have the ability to merge code into the project. Anyone can
+become a Linkerd maintainer (see "Becoming a maintainer" below.)
 
-## GitHub Project Administration
+### Expectations
 
-Maintainers will be added to the linkerd GitHub organization, and be made an
-owner of the GitHub organization.
+Linkerd maintainers are expected to:
 
-## Approving PRs
+* Review pull requests, triage issues, and fix bugs in their areas of
+  expertise, ensuring that all changes go through the project's code review
+  and integration processes.
+* Monitor cncf-linkerd-* emails and the Linkerd Slack, and help out when
+  possible.
+* Rapidly respond to any time-sensitive security release processes.
+* Attend meetings with the Linkerd Steering Committee.
 
-All PRs must receive approval from at least one super maintainer before merge.
+If a maintainer is no longer interested in or cannot perform the duties
+listed above, they should move themselves to emeritus status. If necessary,
+this can also occur through the decision-making process outlined below.
 
-## Changes in Governance
+### Becoming a maintainer
 
-All changes in Governance require a 2/3 majority organization vote.
+Anyone can become a Linkerd maintainer. Maintainers should be extremely
+proficient in Go and/or Rust; have relevant domain expertise; have the time
+and ability to meet the maintainer expectations above; and demonstrate the
+ability to work with the existing maintainers and project processes.
 
+To become a maintainer, start by expressing interest to existing maintainers.
+Existing maintainers will then ask you to demonstrate the qualifications
+above by contributing PRs, doing code reviews, and other such tasks under
+their guidance. After several months of working together, maintainers will
+decide whether to grant maintainer status.
+
+## Project decision-making process
+
+Ideally, all project decisions are resolved by consensus of maintainers and
+directors. If this is not possible, a vote will be called. The voting process is
+a simple majority in which each maintainer and director receives one vote.
+
+[coc]: https://github.com/linkerd/linkerd/wiki/Linkerd-code-of-conduct
+[contrib]: https://github.com/linkerd/linkerd2/blob/main/CONTRIBUTING.md

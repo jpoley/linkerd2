@@ -1,321 +1,224 @@
 package injector
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"strings"
 
-	"github.com/linkerd/linkerd2/pkg/healthcheck"
-	k8sPkg "github.com/linkerd/linkerd2/pkg/k8s"
+	"github.com/linkerd/linkerd2/controller/k8s"
+	"github.com/linkerd/linkerd2/controller/webhook"
+	"github.com/linkerd/linkerd2/pkg/config"
+	"github.com/linkerd/linkerd2/pkg/inject"
+	pkgK8s "github.com/linkerd/linkerd2/pkg/k8s"
+	"github.com/linkerd/linkerd2/pkg/version"
 	log "github.com/sirupsen/logrus"
 	admissionv1beta1 "k8s.io/api/admission/v1beta1"
-	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/serializer"
-	"k8s.io/client-go/kubernetes"
-	"sigs.k8s.io/yaml"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/tools/record"
 )
 
 const (
-	envVarKeyProxyTLSPodIdentity        = "LINKERD2_PROXY_TLS_POD_IDENTITY"
-	envVarKeyProxyTLSControllerIdentity = "LINKERD2_PROXY_TLS_CONTROLLER_IDENTITY"
-	envVarKeyProxyID                    = "LINKERD2_PROXY_ID"
+	eventTypeSkipped  = "InjectionSkipped"
+	eventTypeInjected = "Injected"
 )
 
-// Webhook is a Kubernetes mutating admission webhook that mutates pods admission
-// requests by injecting sidecar container spec into the pod spec during pod
-// creation.
-type Webhook struct {
-	client              kubernetes.Interface
-	deserializer        runtime.Decoder
-	controllerNamespace string
-	resources           *WebhookResources
-	noInitContainer     bool
-	tlsEnabled          bool
-}
+// Inject returns the function that produces an AdmissionResponse containing
+// the patch, if any, to apply to the pod (proxy sidecar and eventually the
+// init container to set it up)
+func Inject(linkerdNamespace string, overrider inject.ValueOverrider) webhook.Handler {
+	return func(
+		ctx context.Context,
+		api *k8s.MetadataAPI,
+		request *admissionv1beta1.AdmissionRequest,
+		recorder record.EventRecorder,
+	) (*admissionv1beta1.AdmissionResponse, error) {
+		log.Debugf("request object bytes: %s", request.Object.Raw)
 
-// NewWebhook returns a new instance of Webhook.
-func NewWebhook(client kubernetes.Interface, resources *WebhookResources, controllerNamespace string, noInitContainer, tlsEnabled bool) (*Webhook, error) {
-	var (
-		scheme = runtime.NewScheme()
-		codecs = serializer.NewCodecFactory(scheme)
-	)
-
-	return &Webhook{
-		client:              client,
-		deserializer:        codecs.UniversalDeserializer(),
-		controllerNamespace: controllerNamespace,
-		resources:           resources,
-		noInitContainer:     noInitContainer,
-		tlsEnabled:          tlsEnabled,
-	}, nil
-}
-
-// Mutate changes the given pod spec by injecting the proxy sidecar container
-// into the spec. The admission review object returns contains the original
-// request and the response with the mutated pod spec.
-func (w *Webhook) Mutate(data []byte) *admissionv1beta1.AdmissionReview {
-	admissionReview, err := w.decode(data)
-	if err != nil {
-		log.Error("failed to decode data. Reason: ", err)
-		admissionReview.Response = &admissionv1beta1.AdmissionResponse{
-			UID:     admissionReview.Request.UID,
-			Allowed: false,
-			Result: &metav1.Status{
-				Message: err.Error(),
-			},
+		// Build the resource config based off the request metadata and kind of
+		// object. This is later used to build the injection report and generated
+		// patch.
+		valuesConfig, err := config.Values(pkgK8s.MountPathValuesConfig)
+		if err != nil {
+			return nil, err
 		}
-		return admissionReview
-	}
-	log.Infof("received admission review request %s", admissionReview.Request.UID)
-	log.Debugf("admission request: %+v", admissionReview.Request)
 
-	admissionResponse, err := w.inject(admissionReview.Request)
-	if err != nil {
-		log.Error("failed to inject sidecar. Reason: ", err)
-		admissionReview.Response = &admissionv1beta1.AdmissionResponse{
-			UID:     admissionReview.Request.UID,
-			Allowed: false,
-			Result: &metav1.Status{
-				Message: err.Error(),
-			},
+		caPEM, err := os.ReadFile(pkgK8s.MountPathTrustRootsPEM)
+		if err != nil {
+			return nil, err
 		}
-		return admissionReview
-	}
-	admissionReview.Response = admissionResponse
+		valuesConfig.IdentityTrustAnchorsPEM = string(caPEM)
 
-	if len(admissionResponse.Patch) > 0 {
-		log.Infof("patch generated: %s", admissionResponse.Patch)
-	}
-	log.Info("done")
+		ns, err := api.Get(k8s.NS, request.Namespace)
+		if err != nil {
+			return nil, err
+		}
+		resourceConfig := inject.NewResourceConfig(valuesConfig, inject.OriginWebhook, linkerdNamespace).
+			WithOwnerRetriever(ownerRetriever(ctx, api, request.Namespace)).
+			WithNsAnnotations(ns.GetAnnotations()).
+			WithKind(request.Kind.Kind)
 
-	return admissionReview
-}
+		// Build the injection report.
+		report, err := resourceConfig.ParseMetaAndYAML(request.Object.Raw)
+		if err != nil {
+			return nil, err
+		}
+		log.Infof("received %s", report.ResName())
 
-func (w *Webhook) decode(data []byte) (*admissionv1beta1.AdmissionReview, error) {
-	var admissionReview admissionv1beta1.AdmissionReview
-	err := yaml.Unmarshal(data, &admissionReview)
-	return &admissionReview, err
-}
+		// If the resource has an owner, then it should be retrieved for recording
+		// events.
+		var parent *metav1.PartialObjectMetadata
+		var ownerKind string
+		if ownerRef := resourceConfig.GetOwnerRef(); ownerRef != nil {
+			res, err := k8s.GetAPIResource(ownerRef.Kind)
+			if err != nil {
+				log.Tracef("skipping event for parent %s: %s", ownerRef.Kind, err)
+			} else {
+				objs, err := api.GetByNamespaceFiltered(res, request.Namespace, ownerRef.Name, labels.Everything())
+				if err != nil {
+					log.Warnf("couldn't retrieve parent object %s-%s-%s; error: %s", request.Namespace, ownerRef.Kind, ownerRef.Name, err)
+				} else if len(objs) == 0 {
+					log.Warnf("couldn't retrieve parent object %s-%s-%s", request.Namespace, ownerRef.Kind, ownerRef.Name)
+				} else {
+					parent = objs[0]
+				}
+				ownerKind = strings.ToLower(ownerRef.Kind)
+			}
+		}
 
-func (w *Webhook) inject(request *admissionv1beta1.AdmissionRequest) (*admissionv1beta1.AdmissionResponse, error) {
-	var deployment appsv1.Deployment
-	if err := yaml.Unmarshal(request.Object.Raw, &deployment); err != nil {
-		return nil, err
-	}
-	log.Infof("working on %s/%s %s..", request.Kind.Version, strings.ToLower(request.Kind.Kind), deployment.ObjectMeta.Name)
+		configLabels := configToPrometheusLabels(resourceConfig)
 
-	ns := request.Namespace
-	if ns == "" {
-		ns = corev1.NamespaceDefault
-	}
-	log.Infof("resource namespace: %s", ns)
+		counter, err := proxyInjectionAdmissionRequests.GetMetricWith(admissionRequestLabels(ownerKind, request.Namespace, report.InjectAnnotationAt, configLabels))
+		if err != nil {
+			log.Errorf("failed to get proxy_inject_admission_requests metric: %q", err)
+		} else {
+			counter.Inc()
+		}
 
-	inject, err := w.shouldInject(ns, &deployment)
-	if err != nil {
-		return nil, err
-	}
+		// If the resource is injectable then admit it after creating a patch that
+		// adds the proxy-init and proxy containers.
+		injectable, reasons := report.Injectable()
+		if injectable {
+			resourceConfig.AppendPodAnnotation(pkgK8s.CreatedByAnnotation, fmt.Sprintf("linkerd/proxy-injector %s", version.Version))
 
-	if !inject {
-		log.Infof("skipping deployment %s", deployment.GetName())
+			// If namespace has annotations that do not exist on pod then copy them
+			// over to pod's template.
+			inject.AppendNamespaceAnnotations(resourceConfig.GetOverrideAnnotations(), resourceConfig.GetNsAnnotations(), resourceConfig.GetWorkloadAnnotations())
+
+			// If the pod did not inherit the opaque ports annotation from the
+			// namespace, then add the default value from the config values. This
+			// ensures that the generated patch always sets the opaque ports
+			// annotation.
+			if !resourceConfig.HasWorkloadAnnotation(pkgK8s.ProxyOpaquePortsAnnotation) {
+				defaultPorts := strings.Split(resourceConfig.GetValues().Proxy.OpaquePorts, ",")
+				filteredPorts := resourceConfig.FilterPodOpaquePorts(defaultPorts)
+				// Only add the annotation if there are ports that the pod exposes
+				// that are in the default opaque ports list.
+				if len(filteredPorts) != 0 {
+					ports := strings.Join(filteredPorts, ",")
+					resourceConfig.AppendPodAnnotation(pkgK8s.ProxyOpaquePortsAnnotation, ports)
+				}
+			}
+
+			patchJSON, err := resourceConfig.GetPodPatch(true, overrider)
+			if err != nil {
+				return nil, err
+			}
+
+			if parent != nil {
+				recorder.Event(parent, v1.EventTypeNormal, eventTypeInjected, "Linkerd sidecar proxy injected")
+			}
+			log.Infof("injection patch generated for: %s", report.ResName())
+			log.Debugf("injection patch: %s", patchJSON)
+
+			counter, err := proxyInjectionAdmissionResponses.GetMetricWith(admissionResponseLabels(ownerKind, request.Namespace, "false", "", report.InjectAnnotationAt, configLabels))
+			if err != nil {
+				log.Errorf("failed to get proxy_inject_admission_responses metric: %q", err)
+			} else {
+				counter.Inc()
+			}
+
+			patchType := admissionv1beta1.PatchTypeJSONPatch
+			return &admissionv1beta1.AdmissionResponse{
+				UID:       request.UID,
+				Allowed:   true,
+				PatchType: &patchType,
+				Patch:     patchJSON,
+			}, nil
+		}
+
+		// Resource could not be injected with the sidecar, format the reason
+		// for injection being skipped to emit an event
+		readableReasons := make([]string, 0, len(reasons))
+		for _, reason := range reasons {
+			readableReasons = append(readableReasons, inject.Reasons[reason])
+		}
+		readableMsg := strings.Join(readableReasons, ", ")
+
+		if parent != nil {
+			recorder.Eventf(parent, v1.EventTypeNormal, eventTypeSkipped, "Linkerd sidecar proxy injection skipped: %s", readableMsg)
+		}
+
+		// Create a patch which adds the opaque ports annotation if the workload
+		// doesn't already have it set.
+		patchJSON, err := resourceConfig.CreateOpaquePortsPatch()
+		if err != nil {
+			return nil, err
+		}
+
+		// If resource needs to be patched with annotations (e.g opaque
+		// ports), then admit the request with the relevant patch
+		if len(patchJSON) != 0 {
+			log.Infof("annotation patch generated for: %s", report.ResName())
+			log.Debugf("annotation patch: %s", patchJSON)
+
+			counter, err := proxyInjectionAdmissionResponses.GetMetricWith(admissionResponseLabels(ownerKind, request.Namespace, "false", "", report.InjectAnnotationAt, configLabels))
+			if err != nil {
+				log.Errorf("failed to get proxy_inject_admission_responses metric: %q", err)
+			} else {
+				counter.Inc()
+			}
+
+			patchType := admissionv1beta1.PatchTypeJSONPatch
+			return &admissionv1beta1.AdmissionResponse{
+				UID:       request.UID,
+				Allowed:   true,
+				PatchType: &patchType,
+				Patch:     patchJSON,
+			}, nil
+		}
+
+		// If the resource is a pod, and no annotation patch has
+		// been generated, record in the metrics (and log) that it has been
+		// entirely skipped and admit without any mutations
+		if resourceConfig.IsPod() {
+			log.Infof("skipped %s: %s", report.ResName(), readableMsg)
+
+			counter, err := proxyInjectionAdmissionResponses.GetMetricWith(admissionResponseLabels(ownerKind, request.Namespace, "true", strings.Join(reasons, ","), report.InjectAnnotationAt, configLabels))
+			if err != nil {
+				log.Errorf("failed to get proxy_inject_admission_responses metric: %q", err)
+			} else {
+				counter.Inc()
+			}
+
+			return &admissionv1beta1.AdmissionResponse{
+				UID:     request.UID,
+				Allowed: true,
+			}, nil
+		}
+
 		return &admissionv1beta1.AdmissionResponse{
 			UID:     request.UID,
 			Allowed: true,
 		}, nil
 	}
-
-	identity := &k8sPkg.TLSIdentity{
-		Name:                deployment.ObjectMeta.Name,
-		Kind:                strings.ToLower(request.Kind.Kind),
-		Namespace:           ns,
-		ControllerNamespace: w.controllerNamespace,
-	}
-
-	proxy, proxyInit, err := w.containersSpec(identity)
-	if err != nil {
-		return nil, err
-	}
-	log.Infof("proxy image: %s", proxy.Image)
-	log.Infof("proxy-init image: %s", proxyInit.Image)
-	log.Debugf("proxy container: %+v", proxy)
-	log.Debugf("init container: %+v", proxyInit)
-
-	patch := NewPatch()
-	patch.addContainer(proxy)
-
-	if !w.noInitContainer {
-		if len(deployment.Spec.Template.Spec.InitContainers) == 0 {
-			patch.addInitContainerRoot()
-		}
-		patch.addInitContainer(proxyInit)
-	}
-
-	if w.tlsEnabled {
-		caBundle, tlsSecrets, err := w.volumesSpec(identity)
-		if err != nil {
-			return nil, err
-		}
-		log.Debugf("ca bundle volume: %+v", caBundle)
-		log.Debugf("tls secrets volume: %+v", tlsSecrets)
-
-		if len(deployment.Spec.Template.Spec.Volumes) == 0 {
-			patch.addVolumeRoot()
-		}
-		patch.addVolume(caBundle)
-		patch.addVolume(tlsSecrets)
-	}
-
-	if deployment.Spec.Template.Labels == nil {
-		deployment.Spec.Template.Labels = map[string]string{}
-	}
-
-	deployment.Spec.Template.Labels[k8sPkg.ControllerNSLabel] = w.controllerNamespace
-	deployment.Spec.Template.Labels[k8sPkg.ProxyDeploymentLabel] = deployment.ObjectMeta.Name
-	patch.addPodLabels(deployment.Spec.Template.Labels)
-
-	if deployment.Labels == nil {
-		deployment.Labels = map[string]string{}
-	}
-
-	deployment.Labels[k8sPkg.ControllerNSLabel] = w.controllerNamespace
-	deployment.Labels[k8sPkg.ProxyDeploymentLabel] = deployment.ObjectMeta.Name
-	patch.addDeploymentLabels(deployment.Labels)
-
-	var (
-		image    = strings.Split(proxy.Image, ":")
-		imageTag = ""
-	)
-
-	if len(image) < 2 {
-		imageTag = "latest"
-	} else {
-		imageTag = image[1]
-	}
-
-	if deployment.Spec.Template.Annotations == nil {
-		deployment.Spec.Template.Annotations = map[string]string{}
-	}
-	deployment.Spec.Template.Annotations[k8sPkg.CreatedByAnnotation] = fmt.Sprintf("linkerd/proxy-injector %s", imageTag)
-	deployment.Spec.Template.Annotations[k8sPkg.ProxyVersionAnnotation] = imageTag
-	patch.addPodAnnotations(deployment.Spec.Template.Annotations)
-
-	patchJSON, err := json.Marshal(patch.patchOps)
-	if err != nil {
-		return nil, err
-	}
-
-	patchType := admissionv1beta1.PatchTypeJSONPatch
-	admissionResponse := &admissionv1beta1.AdmissionResponse{
-		UID:       request.UID,
-		Allowed:   true,
-		Patch:     patchJSON,
-		PatchType: &patchType,
-	}
-
-	return admissionResponse, nil
 }
 
-// shouldInject determines whether or not the given deployment should be
-// injected. A deployment should be injected if it does not already contain
-// any known sidecars, and:
-// - the deployment's namespace has the linkerd.io/inject annotation set to
-//   "enabled", and the deployment's pod spec does not have the
-//   linkerd.io/inject annotation set to "disabled"; or
-// - the deployment's pod spec has the linkerd.io/inject annotation set to
-//   "enabled"
-func (w *Webhook) shouldInject(ns string, deployment *appsv1.Deployment) (bool, error) {
-	if healthcheck.HasExistingSidecars(&deployment.Spec.Template.Spec) {
-		return false, nil
+func ownerRetriever(ctx context.Context, api *k8s.MetadataAPI, ns string) inject.OwnerRetrieverFunc {
+	return func(p *v1.Pod) (string, string, error) {
+		p.SetNamespace(ns)
+		return api.GetOwnerKindAndName(ctx, p, true)
 	}
-
-	namespace, err := w.client.CoreV1().Namespaces().Get(ns, metav1.GetOptions{})
-	if err != nil {
-		return false, err
-	}
-
-	nsAnnotation := namespace.GetAnnotations()[k8sPkg.ProxyInjectAnnotation]
-	podAnnotation := deployment.Spec.Template.GetAnnotations()[k8sPkg.ProxyInjectAnnotation]
-
-	if nsAnnotation == k8sPkg.ProxyInjectEnabled && podAnnotation != k8sPkg.ProxyInjectDisabled {
-		return true, nil
-	}
-
-	return podAnnotation == k8sPkg.ProxyInjectEnabled, nil
-}
-
-func (w *Webhook) containersSpec(identity *k8sPkg.TLSIdentity) (*corev1.Container, *corev1.Container, error) {
-	proxySpec, err := ioutil.ReadFile(w.resources.FileProxySpec)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var proxy corev1.Container
-	if err := yaml.Unmarshal(proxySpec, &proxy); err != nil {
-		return nil, nil, err
-	}
-
-	for index, env := range proxy.Env {
-		if env.Name == envVarKeyProxyTLSPodIdentity {
-			proxy.Env[index].Value = identity.ToDNSName()
-		} else if env.Name == envVarKeyProxyTLSControllerIdentity {
-			proxy.Env[index].Value = identity.ToControllerIdentity().ToDNSName()
-		} else if env.Name == envVarKeyProxyID {
-			proxy.Env[index].Value = identity.ToDNSName()
-		}
-	}
-
-	proxyInitSpec, err := ioutil.ReadFile(w.resources.FileProxyInitSpec)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var proxyInit corev1.Container
-	if err := yaml.Unmarshal(proxyInitSpec, &proxyInit); err != nil {
-		return nil, nil, err
-	}
-
-	return &proxy, &proxyInit, nil
-}
-
-func (w *Webhook) volumesSpec(identity *k8sPkg.TLSIdentity) (*corev1.Volume, *corev1.Volume, error) {
-	trustAnchorVolumeSpec, err := ioutil.ReadFile(w.resources.FileTLSTrustAnchorVolumeSpec)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var trustAnchors corev1.Volume
-	if err := yaml.Unmarshal(trustAnchorVolumeSpec, &trustAnchors); err != nil {
-		return nil, nil, err
-	}
-
-	tlsVolumeSpec, err := ioutil.ReadFile(w.resources.FileTLSIdentityVolumeSpec)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var linkerdSecrets corev1.Volume
-	if err := yaml.Unmarshal(tlsVolumeSpec, &linkerdSecrets); err != nil {
-		return nil, nil, err
-	}
-	linkerdSecrets.VolumeSource.Secret.SecretName = identity.ToSecretName()
-
-	return &trustAnchors, &linkerdSecrets, nil
-}
-
-// WebhookResources contain paths to all the needed file resources.
-type WebhookResources struct {
-	// FileProxySpec is the path to the proxy spec.
-	FileProxySpec string
-
-	// FileProxyInitSpec is the path to the proxy-init spec.
-	FileProxyInitSpec string
-
-	// FileTLSTrustAnchorVolumeSpec is the path to the trust anchor volume spec.
-	FileTLSTrustAnchorVolumeSpec string
-
-	// FileTLSIdentityVolumeSpec is the path to the TLS identity volume spec.
-	FileTLSIdentityVolumeSpec string
 }

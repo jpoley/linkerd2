@@ -1,4 +1,59 @@
 {
+  "__inputs": [
+    {
+      "name": "datasource",
+      "label": "prometheus",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "__elements": [],
+  "__requires": [
+    {
+      "type": "panel",
+      "id": "gauge",
+      "name": "Gauge",
+      "version": ""
+    },
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "8.3.3"
+    },
+    {
+      "type": "panel",
+      "id": "graph",
+      "name": "Graph (old)",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "heatmap",
+      "name": "Heatmap",
+      "version": ""
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    },
+    {
+      "type": "panel",
+      "id": "stat",
+      "name": "Stat",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "text",
+      "name": "Text",
+      "version": ""
+    }
+  ],
   "annotations": {
     "list": [
       {
@@ -22,7 +77,7 @@
     {
       "content": "<div class=\"text-center dashboard-header\">\n  <span>Data-Plane Telemetry</span>\n</div>",
       "gridPos": {
-        "h": 2.2,
+        "h": 2,
         "w": 24,
         "x": 0,
         "y": 0
@@ -30,6 +85,7 @@
       "id": 400,
       "links": [],
       "mode": "html",
+      "options": {},
       "title": "",
       "transparent": true,
       "type": "text"
@@ -39,13 +95,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 0,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 2.2
+        "y": 2
       },
       "id": 397,
       "legend": {
@@ -61,6 +120,7 @@
       "linewidth": 1,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
@@ -71,14 +131,14 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "process_virtual_memory_bytes{control_plane_ns=\"$namespace\", job=\"linkerd-proxy\"}",
+          "expr": "process_virtual_memory_bytes{job=\"linkerd-proxy\"}",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "{{namespace}}/{{pod}}/virtual",
           "refId": "A"
         },
         {
-          "expr": "process_resident_memory_bytes{control_plane_ns=\"$namespace\", job=\"linkerd-proxy\"}",
+          "expr": "process_resident_memory_bytes{job=\"linkerd-proxy\"}",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "{{namespace}}/{{pod}}/resident",
@@ -87,10 +147,11 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "MEMORY USAGE",
       "tooltip": {
-        "shared": false,
+        "shared": true,
         "sort": 2,
         "value_type": "individual"
       },
@@ -130,13 +191,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 0,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 2.2
+        "y": 2
       },
       "id": 399,
       "legend": {
@@ -152,6 +216,7 @@
       "linewidth": 1,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
@@ -162,7 +227,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(irate(process_cpu_seconds_total{control_plane_ns=\"$namespace\", job=\"linkerd-proxy\"}[20s])) by (namespace, pod)",
+          "expr": "sum(irate(process_cpu_seconds_total{job=\"linkerd-proxy\"}[$__rate_interval])) by (namespace, pod)",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "{{namespace}}/{{pod}}",
@@ -171,10 +236,11 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "CPU USAGE",
       "tooltip": {
-        "shared": false,
+        "shared": true,
         "sort": 2,
         "value_type": "individual"
       },
@@ -214,13 +280,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 0,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 2.2
+        "y": 2
       },
       "id": 398,
       "legend": {
@@ -236,6 +305,7 @@
       "linewidth": 1,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
@@ -246,7 +316,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "process_open_fds{control_plane_ns=\"$namespace\", job=\"linkerd-proxy\"}",
+          "expr": "process_open_fds{job=\"linkerd-proxy\"}",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "{{namespace}}/{{pod}}",
@@ -255,10 +325,11 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "OPEN FILE DESCRIPTORS",
       "tooltip": {
-        "shared": false,
+        "shared": true,
         "sort": 2,
         "value_type": "individual"
       },
@@ -296,43 +367,15 @@
     {
       "content": "<div class=\"text-center dashboard-header\">\n  <span>Control-Plane Traffic</span>\n</div>",
       "gridPos": {
-        "h": 2.2,
+        "h": 2,
         "w": 24,
         "x": 0,
-        "y": 9.2
+        "y": 9
       },
       "id": 401,
       "links": [],
       "mode": "html",
-      "title": "",
-      "transparent": true,
-      "type": "text"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 11.399999999999999
-      },
-      "id": 19,
-      "panels": [],
-      "repeat": "deployment",
-      "title": "",
-      "type": "row"
-    },
-    {
-      "content": "<div>\n  <img src=\"https://linkerd.io/images/identity/favicon/linkerd-favicon.png\" style=\"baseline; height:40px;\"/>&nbsp;\n  <span style=\"font-size: 15px; border-image:none\">deploy/$deployment</span>\n</div>",
-      "gridPos": {
-        "h": 2.2,
-        "w": 24,
-        "x": 0,
-        "y": 12.399999999999999
-      },
-      "id": 21,
-      "links": [],
-      "mode": "html",
+      "options": {},
       "title": "",
       "transparent": true,
       "type": "text"
@@ -342,13 +385,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 1,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 14.599999999999998
+        "y": 11
       },
       "id": 23,
       "legend": {
@@ -364,17 +410,23 @@
       "linewidth": 1,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
+      "scopedVars": {
+        "deployment": {
+          "selected": false
+        }
+      },
       "seriesOverrides": [],
       "spaceLength": 10,
       "stack": false,
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(irate(response_total{classification=\"success\", deployment=\"$deployment\", namespace=\"$namespace\", direction=\"inbound\"}[30s])) by (deployment, pod) / sum(irate(response_total{deployment=\"$deployment\", namespace=\"$namespace\", direction=\"inbound\"}[30s])) by (deployment, pod)",
+          "expr": "sum(irate(response_total{classification=\"success\", deployment!=\"\", namespace=~\"$namespace|$namespace-viz\", direction=\"inbound\"}[$__rate_interval])) by (pod) / sum(irate(response_total{deployment!=\"\", namespace=~\"$namespace|$namespace-viz\", direction=\"inbound\"}[$__rate_interval])) by (pod)",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "po/{{pod}}",
@@ -383,6 +435,7 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "SUCCESS RATE",
       "tooltip": {
@@ -426,13 +479,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 0,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 14.599999999999998
+        "y": 11
       },
       "id": 24,
       "legend": {
@@ -448,17 +504,23 @@
       "linewidth": 1,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
+      "scopedVars": {
+        "deployment": {
+          "selected": false
+        }
+      },
       "seriesOverrides": [],
       "spaceLength": 10,
       "stack": false,
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(irate(request_total{deployment=\"$deployment\", namespace=\"$namespace\", direction=\"inbound\"}[30s])) by (deployment, pod)",
+          "expr": "sum(irate(request_total{deployment!=\"\", namespace=~\"$namespace|$namespace-viz\", direction=\"inbound\"}[$__rate_interval])) by (pod)",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "po/{{pod}}",
@@ -467,6 +529,7 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "REQUEST RATE",
       "tooltip": {
@@ -510,13 +573,17 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "",
       "fill": 1,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 14.599999999999998
+        "y": 11
       },
       "id": 25,
       "legend": {
@@ -532,41 +599,34 @@
       "linewidth": 1,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
+      "scopedVars": {
+        "deployment": {
+          "selected": false
+        }
+      },
       "seriesOverrides": [],
       "spaceLength": 10,
       "stack": false,
       "steppedLine": false,
       "targets": [
         {
-          "expr": "histogram_quantile(0.5, sum(rate(response_latency_ms_bucket{deployment=\"$deployment\", namespace=\"$namespace\", direction=\"inbound\"}[30s])) by (le, deployment, pod))",
+          "expr": "histogram_quantile(0.95, sum(rate(response_latency_ms_bucket{deployment!=\"\", namespace=~\"$namespace|$namespace-viz\", direction=\"inbound\"}[$__rate_interval])) by (le, pod))",
           "format": "time_series",
           "intervalFactor": 1,
-          "legendFormat": "p50 po/{{pod}}",
+          "legendFormat": "po/{{pod}}",
           "refId": "A"
-        },
-        {
-          "expr": "histogram_quantile(0.95, sum(rate(response_latency_ms_bucket{deployment=\"$deployment\", namespace=\"$namespace\", direction=\"inbound\"}[30s])) by (le, deployment, pod))",
-          "format": "time_series",
-          "intervalFactor": 1,
-          "legendFormat": "p95 po/{{pod}}",
-          "refId": "B"
-        },
-        {
-          "expr": "histogram_quantile(0.99, sum(rate(response_latency_ms_bucket{deployment=\"$deployment\", namespace=\"$namespace\", direction=\"inbound\"}[30s])) by (le, deployment, pod))",
-          "format": "time_series",
-          "intervalFactor": 1,
-          "legendFormat": "p99 po/{{pod}}",
-          "refId": "C"
         }
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
-      "title": "LATENCY",
+      "title": "P95 LATENCY",
       "tooltip": {
         "shared": true,
         "sort": 2,
@@ -604,29 +664,17 @@
       }
     },
     {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 21.599999999999998
-      },
-      "id": 339,
-      "panels": [],
-      "title": "",
-      "type": "row"
-    },
-    {
       "content": "<div class=\"text-center dashboard-header\">\n  <span>Control-Plane TCP Metrics</span>\n</div>",
       "gridPos": {
-        "h": 2.2,
+        "h": 2,
         "w": 24,
         "x": 0,
-        "y": 22.599999999999998
+        "y": 18
       },
-      "id": 340,
+      "id": 731,
       "links": [],
       "mode": "html",
+      "options": {},
       "title": "",
       "transparent": true,
       "type": "text"
@@ -637,22 +685,28 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 24.799999999999997
+        "y": 20
       },
       "id": 179,
       "panels": [
         {
           "content": "<div>\n  <img src=\"https://linkerd.io/images/identity/favicon/linkerd-favicon.png\" style=\"baseline; height:40px;\"/>&nbsp;\n  <span style=\"font-size: 15px; border-image:none\">deploy/$deployment</span>\n</div>",
           "gridPos": {
-            "h": 2.2,
+            "h": 2,
             "w": 24,
             "x": 0,
-            "y": 21.799999999999997
+            "y": 21
           },
           "id": 282,
           "links": [],
           "mode": "html",
+          "options": {},
           "repeatedByRow": true,
+          "scopedVars": {
+            "deployment": {
+              "selected": false
+            }
+          },
           "title": "",
           "transparent": true,
           "type": "text"
@@ -662,13 +716,16 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "prometheus",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "fill": 1,
           "gridPos": {
             "h": 7,
             "w": 8,
             "x": 0,
-            "y": 23.999999999999996
+            "y": 23
           },
           "id": 227,
           "legend": {
@@ -684,17 +741,23 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null",
+          "options": {},
           "percentage": false,
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
+          "scopedVars": {
+            "deployment": {
+              "selected": false
+            }
+          },
           "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
           "steppedLine": false,
           "targets": [
             {
-              "expr": "tcp_close_total{deployment=\"$deployment\", namespace=\"$namespace\", direction=\"inbound\",errno!=\"\"}",
+              "expr": "tcp_close_total{deployment=\"$deployment\", namespace=~\"$namespace|$namespace-viz\", direction=\"inbound\",errno!=\"\"}",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{peer}} {{errno}}",
@@ -703,6 +766,7 @@
           ],
           "thresholds": [],
           "timeFrom": null,
+          "timeRegions": [],
           "timeShift": null,
           "title": "TCP CONNECTION FAILURES",
           "tooltip": {
@@ -746,13 +810,16 @@
           "bars": false,
           "dashLength": 10,
           "dashes": false,
-          "datasource": "prometheus",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "fill": 0,
           "gridPos": {
             "h": 7,
             "w": 8,
             "x": 8,
-            "y": 23.999999999999996
+            "y": 23
           },
           "id": 132,
           "legend": {
@@ -768,17 +835,23 @@
           "linewidth": 1,
           "links": [],
           "nullPointMode": "null",
+          "options": {},
           "percentage": false,
           "pointradius": 5,
           "points": false,
           "renderer": "flot",
+          "scopedVars": {
+            "deployment": {
+              "selected": false
+            }
+          },
           "seriesOverrides": [],
           "spaceLength": 10,
           "stack": false,
           "steppedLine": false,
           "targets": [
             {
-              "expr": "tcp_open_connections{deployment=\"$deployment\", namespace=\"$namespace\", direction=\"inbound\"}",
+              "expr": "tcp_open_connections{deployment=\"$deployment\", namespace=~\"$namespace|$namespace-viz\", direction=\"inbound\"}",
               "format": "time_series",
               "intervalFactor": 1,
               "legendFormat": "{{peer}}",
@@ -787,6 +860,7 @@
           ],
           "thresholds": [],
           "timeFrom": null,
+          "timeRegions": [],
           "timeShift": null,
           "title": "OPEN TCP CONNECTIONS",
           "tooltip": {
@@ -838,23 +912,34 @@
             "mode": "spectrum"
           },
           "dataFormat": "timeseries",
-          "datasource": "prometheus",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
           "gridPos": {
             "h": 7,
             "w": 8,
             "x": 16,
-            "y": 23.999999999999996
+            "y": 23
           },
           "heatmap": {},
+          "hideZeroBuckets": false,
           "highlightCards": true,
           "id": 229,
           "legend": {
             "show": false
           },
           "links": [],
+          "options": {},
+          "reverseYBuckets": false,
+          "scopedVars": {
+            "deployment": {
+              "selected": false
+            }
+          },
           "targets": [
             {
-              "expr": "tcp_connection_duration_ms_bucket{deployment=\"$deployment\", namespace=\"$namespace\", direction=\"inbound\"}",
+              "expr": "tcp_connection_duration_ms_bucket{deployment=\"$deployment\", namespace=~\"$namespace|$namespace-viz\", direction=\"inbound\"}",
               "format": "time_series",
               "intervalFactor": 1,
               "refId": "A"
@@ -886,33 +971,26 @@
         }
       ],
       "repeat": "deployment",
-      "title": "$deployment",
-      "type": "row"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 25.799999999999997
+      "scopedVars": {
+        "deployment": {
+          "selected": false
+        }
       },
-      "id": 90,
-      "panels": [],
-      "title": "",
+      "title": "$deployment",
       "type": "row"
     },
     {
       "content": "<div class=\"text-center dashboard-header\">\n  <span>Control-Plane Telemetry</span>\n</div>",
       "gridPos": {
-        "h": 2.2,
+        "h": 2,
         "w": 24,
         "x": 0,
-        "y": 26.799999999999997
+        "y": 28
       },
       "id": 27,
       "links": [],
       "mode": "html",
+      "options": {},
       "title": "",
       "transparent": true,
       "type": "text"
@@ -922,13 +1000,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 1,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 28.999999999999996
+        "y": 30
       },
       "id": 2,
       "legend": {
@@ -944,6 +1025,7 @@
       "linewidth": 1,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
@@ -963,6 +1045,7 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "goroutines",
       "tooltip": {
@@ -1006,13 +1089,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 1,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 28.999999999999996
+        "y": 30
       },
       "id": 5,
       "legend": {
@@ -1028,6 +1114,7 @@
       "linewidth": 1,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
@@ -1054,6 +1141,7 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "Process Memory",
       "tooltip": {
@@ -1097,13 +1185,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 1,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 28.999999999999996
+        "y": 30
       },
       "id": 7,
       "legend": {
@@ -1119,6 +1210,7 @@
       "linewidth": 1,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
@@ -1138,6 +1230,7 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "Open FDs",
       "tooltip": {
@@ -1181,13 +1274,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 1,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 36
+        "y": 37
       },
       "id": 9,
       "legend": {
@@ -1203,6 +1299,7 @@
       "linewidth": 1,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
@@ -1222,6 +1319,7 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "Threads",
       "tooltip": {
@@ -1261,17 +1359,125 @@
       }
     },
     {
+      "content": "<div class=\"text-center dashboard-header\">\n  <span>Control-Plane Clients/Servers</span>\n</div>",
+      "gridPos": {
+        "h": 2,
+        "w": 24,
+        "x": 0,
+        "y": 44
+      },
+      "id": 625,
+      "links": [],
+      "mode": "html",
+      "options": {},
+      "title": "",
+      "transparent": true,
+      "type": "text"
+    },
+    {
       "aliasColors": {},
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fill": 1,
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 46
+      },
+      "id": 622,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": false,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {},
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "sum(irate(http_server_requests_total{job=\"linkerd-controller\"}[$__rate_interval])) by (component, method, code)",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "{{component}}/{{method}}/{{code}}",
+          "refId": "A"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Server Request Rate",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "rps",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 1,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 36
+        "y": 46
       },
       "id": 12,
       "legend": {
@@ -1287,6 +1493,7 @@
       "linewidth": 1,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
@@ -1297,31 +1504,32 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "histogram_quantile(0.5, sum(rate(http_request_duration_seconds_bucket{job=\"linkerd-controller\"}[30s])) by (le, component, code))",
+          "expr": "histogram_quantile(0.5, sum(rate(http_server_request_latency_seconds_bucket{job=\"linkerd-controller\"}[$__rate_interval])) by (le, component, method, code))",
           "format": "time_series",
           "intervalFactor": 1,
-          "legendFormat": "P50 {{component}}/{{code}}",
+          "legendFormat": "P50 {{component}}/{{method}}/{{code}}",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"linkerd-controller\"}[30s])) by (le, component, code))",
+          "expr": "histogram_quantile(0.95, sum(rate(http_server_request_latency_seconds_bucket{job=\"linkerd-controller\"}[$__rate_interval])) by (le, component, method, code))",
           "format": "time_series",
           "intervalFactor": 1,
-          "legendFormat": "P95 {{component}}/{{code}}",
+          "legendFormat": "P95 {{component}}/{{method}}/{{code}}",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=\"linkerd-controller\"}[30s])) by (le, component, code))",
+          "expr": "histogram_quantile(0.99, sum(rate(http_server_request_latency_seconds_bucket{job=\"linkerd-controller\"}[$__rate_interval])) by (le, component, method, code))",
           "format": "time_series",
           "intervalFactor": 1,
-          "legendFormat": "P99 {{component}}/{{code}}",
+          "legendFormat": "P99 {{component}}/{{method}}/{{code}}",
           "refId": "C"
         }
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
-      "title": "HTTP Latency",
+      "title": "HTTP Server Latency",
       "tooltip": {
         "shared": true,
         "sort": 2,
@@ -1359,30 +1567,425 @@
       }
     },
     {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fill": 1,
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 46
+      },
+      "id": 624,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": false,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {},
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(http_server_response_size_bytes_bucket{job=\"linkerd-controller\"}[$__rate_interval])) by (le, component, method, code))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "P50 {{component}}/{{method}}/{{code}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_server_response_size_bytes_bucket{job=\"linkerd-controller\"}[$__rate_interval])) by (le, component, method, code))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "P95 {{component}}/{{method}}/{{code}}",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(http_server_response_size_bytes_bucket{job=\"linkerd-controller\"}[$__rate_interval])) by (le, component, method, code))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "P99 {{component}}/{{method}}/{{code}}",
+          "refId": "C"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "HTTP Server Response Size",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "decbytes",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fill": 1,
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 53
+      },
+      "id": 623,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": false,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {},
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "sum(irate(http_client_requests_total{job=\"linkerd-controller\"}[$__rate_interval])) by (component, client, method, code)",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "{{component}}/{{client}}/{{method}}/{{code}}",
+          "refId": "A"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Client Request Rate",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "rps",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fill": 1,
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 53
+      },
+      "id": 570,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": false,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {},
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum(rate(http_client_request_latency_seconds_bucket{job=\"linkerd-controller\"}[$__rate_interval])) by (le, component, client, method, code))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "P50 {{component}}/{{client}}/{{method}}/{{code}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_client_request_latency_seconds_bucket{job=\"linkerd-controller\"}[$__rate_interval])) by (le, component, client, method, code))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "P95 {{component}}/{{client}}/{{method}}/{{code}}",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(http_client_request_latency_seconds_bucket{job=\"linkerd-controller\"}[$__rate_interval])) by (le, component, client, method, code))",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "P99 {{component}}/{{client}}/{{method}}/{{code}}",
+          "refId": "C"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "HTTP Client Latency",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "s",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "fill": 1,
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 53
+      },
+      "id": 621,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": false,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "links": [],
+      "nullPointMode": "null",
+      "options": {},
+      "percentage": false,
+      "pointradius": 5,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "sum(http_client_in_flight_requests{job=\"linkerd-controller\"}) by (component, client)",
+          "format": "time_series",
+          "intervalFactor": 1,
+          "legendFormat": "{{component}}/{{client}}",
+          "refId": "A"
+        }
+      ],
+      "thresholds": [],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Client In-Flight Requests",
+      "tooltip": {
+        "shared": true,
+        "sort": 2,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 43
+        "y": 60
       },
       "id": 458,
       "panels": [],
       "repeat": "component",
+      "scopedVars": {
+        "component": {
+          "selected": false
+        }
+      },
       "title": "",
       "type": "row"
     },
     {
       "content": "<div>\n  <img src=\"https://linkerd.io/images/identity/favicon/linkerd-favicon.png\" style=\"baseline; height:40px;\"/>&nbsp;\n  <span style=\"font-size: 15px; border-image:none\">$component</span>\n</div>",
       "gridPos": {
-        "h": 2.2,
+        "h": 2,
         "w": 24,
         "x": 0,
-        "y": 44
+        "y": 61
       },
       "id": 30,
       "links": [],
       "mode": "html",
+      "options": {},
+      "scopedVars": {
+        "component": {
+          "selected": false
+        }
+      },
       "title": "",
       "transparent": true,
       "type": "text"
@@ -1392,13 +1995,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 1,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 46.2
+        "y": 63
       },
       "id": 6,
       "legend": {
@@ -1414,10 +2020,16 @@
       "linewidth": 1,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
+      "scopedVars": {
+        "component": {
+          "selected": false
+        }
+      },
       "seriesOverrides": [],
       "spaceLength": 10,
       "stack": false,
@@ -1431,7 +2043,7 @@
           "refId": "A"
         },
         {
-          "expr": "irate(go_memstats_alloc_bytes_total{job=\"linkerd-controller\", component=\"$component\"}[30s])",
+          "expr": "irate(go_memstats_alloc_bytes_total{job=\"linkerd-controller\", component=\"$component\"}[$__rate_interval])",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "alloc rate/{{component}}",
@@ -1454,6 +2066,7 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "Go Memstats",
       "tooltip": {
@@ -1497,13 +2110,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 1,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 46.2
+        "y": 63
       },
       "id": 8,
       "legend": {
@@ -1519,10 +2135,16 @@
       "linewidth": 1,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
+      "scopedVars": {
+        "component": {
+          "selected": false
+        }
+      },
       "seriesOverrides": [],
       "spaceLength": 10,
       "stack": false,
@@ -1552,6 +2174,7 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "GC Duration",
       "tooltip": {
@@ -1595,13 +2218,16 @@
       "bars": false,
       "dashLength": 10,
       "dashes": false,
-      "datasource": "prometheus",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "fill": 1,
       "gridPos": {
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 46.2
+        "y": 63
       },
       "id": 14,
       "legend": {
@@ -1617,24 +2243,30 @@
       "linewidth": 1,
       "links": [],
       "nullPointMode": "null",
+      "options": {},
       "percentage": false,
       "pointradius": 5,
       "points": false,
       "renderer": "flot",
+      "scopedVars": {
+        "component": {
+          "selected": false
+        }
+      },
       "seriesOverrides": [],
       "spaceLength": 10,
       "stack": false,
       "steppedLine": false,
       "targets": [
         {
-          "expr": "irate(grpc_server_msg_sent_total{job=\"linkerd-controller\", component=\"$component\"}[30s])",
+          "expr": "irate(grpc_server_msg_sent_total{job=\"linkerd-controller\", component=\"$component\"}[$__rate_interval])",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "sent/{{component}}/{{grpc_method}}",
           "refId": "A"
         },
         {
-          "expr": "irate(grpc_server_msg_received_total{job=\"linkerd-controller\", component=\"$component\"}[30s])",
+          "expr": "irate(grpc_server_msg_received_total{job=\"linkerd-controller\", component=\"$component\"}[$__rate_interval])",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "received/{{component}}/{{grpc_method}}",
@@ -1643,6 +2275,7 @@
       ],
       "thresholds": [],
       "timeFrom": null,
+      "timeRegions": [],
       "timeShift": null,
       "title": "gRPC Message Volume",
       "tooltip": {
@@ -1687,7 +2320,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 53.2
+        "y": 141.4
       },
       "id": 515,
       "panels": [],
@@ -1695,24 +2328,25 @@
       "type": "row"
     },
     {
-      "content": "<div>\n  <div style=\"position: absolute; top: 0, left: 0\">\n    <a href=\"https://linkerd.io\" target=\"_blank\"><img src=\"https://linkerd.io/images/identity/svg/linkerd_primary_color_white.svg\" style=\"height: 30px;\"></a>\n  </div>\n  <div id=\"version\" style=\"position: absolute; top: 0; right: 0; font-size: 15px\">\n  </div>\n</div>\n<script type=\"text/javascript\">\nvar localReqURL =\n  window.location.href.substring(\n    0,\n    window.location.href.indexOf(\n    \"/grafana/\"\n    )\n  )+'/overview';\n\nfetch(localReqURL, {\n  credentials: 'include',\n  headers: {\n    \"Content-Type\": \"text/html; charset=utf-8\",\n  },\n})\n.then(response => response.text())\n.then(text => (new window.DOMParser()).parseFromString(text, \"text/html\"))\n.then(html => {\n  var main = html.getElementById('main');\n  var localVersion = main.getAttribute(\"data-release-version\");\n  var versionElem = document.getElementById('version');\n\n  var channel;\n  var parts = localVersion.split(\"-\", 2);\n  if (parts.length === 2) {\n    channel = parts[0];\n    versionElem.innerHTML += 'Running Linkerd ' + parts[1] + ' (' + parts[0] + ')' + '.<br>';\n  } else {\n    versionElem.innerHTML += 'Running Linkerd ' + localVersion + '.<br>';\n  }\n  var uuid = main.getAttribute(\"data-uuid\");\n\n  fetch('https://versioncheck.linkerd.io/version.json?version='+localVersion+'&uuid='+uuid+'&source=grafana', {\n    credentials: 'include',\n    headers: {\n      \"Content-Type\": \"application/json; charset=utf-8\",\n    },\n  })\n  .then(response => response.json())\n  .then(json => {\n    if (!channel || !json[channel]) {\n      versionElem.innerHTML += 'Version check failed.'\n    } else if (json[channel] === localVersion) {\n      versionElem.innerHTML += 'Linkerd is up to date.';\n    } else {\n      parts = json[channel].split(\"-\", 2);\n      if (parts.length === 2) {\n        versionElem.innerHTML += \"A new \"+parts[0]+\" version (\"+parts[1]+\") is available.\"\n      } else {\n        versionElem.innerHTML += \"A new version (\"+json[channel]+\") is available.\"\n      }\n      versionElem.innerHTML += \" <a href='https://versioncheck.linkerd.io/update' target='_blank'>Update now</a>.\";\n    }\n  });\n});\n</script>",
+      "content": "<div>\n  <div style=\"position: absolute; top: 0, left: 0\">\n    <a href=\"https://linkerd.io\" target=\"_blank\"><img src=\"https://linkerd.io/images/identity/svg/linkerd_primary_color_white.svg\" style=\"height: 30px;\"></a>\n  </div>\n  <div id=\"version\" style=\"position: absolute; top: 0; right: 0; font-size: 15px\">\n  </div>\n</div>\n<div style=\"display:none\">\n<script type=\"text/javascript\">\nvar localReqURL =\n  window.location.href.substring(\n    0,\n    window.location.href.indexOf(\n    \"/grafana/\"\n    )\n  )+'/overview';\n\nfetch(localReqURL, {\n  credentials: 'include',\n  headers: {\n    \"Content-Type\": \"text/html; charset=utf-8\",\n  },\n})\n.then(response => response.text())\n.then(text => (new window.DOMParser()).parseFromString(text, \"text/html\"))\n.then(html => {\n  var main = html.getElementById('main');\n  var localVersion = main.getAttribute(\"data-release-version\");\n  var versionElem = document.getElementById('version');\n\n  var channel;\n  var parts = localVersion.split(\"-\", 2);\n  if (parts.length === 2) {\n    channel = parts[0];\n    versionElem.innerHTML += 'Running Linkerd ' + parts[1] + ' (' + parts[0] + ')' + '.<br>';\n  } else {\n    versionElem.innerHTML += 'Running Linkerd ' + localVersion + '.<br>';\n  }\n  var uuid = main.getAttribute(\"data-uuid\");\n\n  fetch('https://versioncheck.linkerd.io/version.json?version='+localVersion+'&uuid='+uuid+'&source=grafana', {\n    credentials: 'include',\n    headers: {\n      \"Content-Type\": \"application/json; charset=utf-8\",\n    },\n  })\n  .then(response => response.json())\n  .then(json => {\n    if (!channel || !json[channel]) {\n      versionElem.innerHTML += 'Version check failed.'\n    } else if (json[channel] === localVersion) {\n      versionElem.innerHTML += 'Linkerd is up to date.';\n    } else {\n      parts = json[channel].split(\"-\", 2);\n      if (parts.length === 2) {\n        versionElem.innerHTML += \"A new \"+parts[0]+\" version (\"+parts[1]+\") is available.\"\n      } else {\n        versionElem.innerHTML += \"A new version (\"+json[channel]+\") is available.\"\n      }\n      versionElem.innerHTML += \" <a href='https://versioncheck.linkerd.io/update' target='_blank'>Update now</a>.\";\n    }\n  });\n});\n</script>\n</div>",
       "gridPos": {
         "h": 3,
         "w": 24,
         "x": 0,
-        "y": 54.2
+        "y": 142.4
       },
       "height": "1px",
       "id": 519,
       "links": [],
       "mode": "html",
+      "options": {},
       "title": "",
       "transparent": true,
       "type": "text"
     }
   ],
-  "refresh": "5s",
-  "schemaVersion": 16,
+  "refresh": "1m",
+  "schemaVersion": 18,
   "style": "dark",
   "tags": [
     "linkerd"
@@ -1720,18 +2354,40 @@
   "templating": {
     "list": [
       {
-        "allValue": null,
-        "current": {},
-        "datasource": "prometheus",
+        "current": {
+          "text": "default",
+          "value": "default"
+        },
+        "hide": 0,
+        "label": "Data Source",
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "type": "datasource"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "definition": "",
         "hide": 2,
         "includeAll": true,
         "label": "Deployment",
         "multi": false,
         "name": "deployment",
         "options": [],
-        "query": "label_values(request_total{control_plane_component!=\"\"}, deployment)",
+        "query": "label_values(process_start_time_seconds{namespace=~\"$namespace|$namespace-viz\"}, deployment)",
         "refresh": 2,
         "regex": "",
+        "skipUrlSync": false,
         "sort": 1,
         "tagValuesQuery": "",
         "tags": [],
@@ -1740,9 +2396,16 @@
         "useTags": false
       },
       {
-        "allValue": null,
-        "current": {},
-        "datasource": "prometheus",
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "definition": "",
         "hide": 2,
         "includeAll": true,
         "label": "Component",
@@ -1752,6 +2415,7 @@
         "query": "label_values(component)",
         "refresh": 2,
         "regex": "",
+        "skipUrlSync": false,
         "sort": 1,
         "tagValuesQuery": "",
         "tags": [],
@@ -1760,18 +2424,48 @@
         "useTags": false
       },
       {
-        "allValue": null,
+        "allValue": ".*",
         "current": {},
-        "datasource": "prometheus",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "definition": "",
         "hide": 0,
         "includeAll": false,
         "label": "Linkerd Namespace",
         "multi": false,
         "name": "namespace",
         "options": [],
-        "query": "label_values(request_total{control_plane_ns!=\"\"},  control_plane_ns)",
+        "query": "label_values(process_start_time_seconds{control_plane_ns!=\"\"},  control_plane_ns)",
         "refresh": 2,
         "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "tagValuesQuery": "",
+        "tags": [],
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
+      },
+      {
+        "allValue": ".*",
+        "current": {},
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "definition": "",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Linkerd Viz Namespace",
+        "multi": false,
+        "name": "namespace-viz",
+        "options": [],
+        "query": "label_values(process_start_time_seconds{control_plane_ns!=\"\",extension!=\"\"},  namespace)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
         "sort": 0,
         "tagValuesQuery": "",
         "tags": [],
@@ -1812,6 +2506,6 @@
   },
   "timezone": "",
   "title": "Linkerd Health",
-  "uid": "Og9nanzmk",
+  "uid": "linkerd-health",
   "version": 1
 }

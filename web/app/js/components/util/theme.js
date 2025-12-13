@@ -18,21 +18,25 @@ const status = {
     warning: orange[200],
     good: green[200],
     default: grey[200],
-  }
+  },
 };
 
 export const dashboardTheme = {
   palette: {
-    primary: green
+    primary: {
+      main: '#001443',
+    },
   },
-  typography: {
-    useNextVariants: true,
-    suppressDeprecationWarnings: true // https://github.com/mui-org/material-ui/issues/13175
+  // substituting default Material breakpoints with Bootstrap breakpoints
+  breakpoints: {
+    values: {
+      sm: 576,
+      md: 992,
+      lg: 1200,
+    },
   },
-  status
+  status,
 };
-
-
 
 export const statusClassNames = theme => {
   theme.status = theme.status || status; // tests don't inject custom variables

@@ -1,22 +1,21 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
-	"time"
 
+	sp "github.com/linkerd/linkerd2/controller/gen/apis/serviceprofile/v1alpha2"
+	pkgcmd "github.com/linkerd/linkerd2/pkg/cmd"
+	"github.com/linkerd/linkerd2/pkg/healthcheck"
+	"github.com/linkerd/linkerd2/pkg/k8s"
 	"github.com/linkerd/linkerd2/pkg/profiles"
 	"github.com/spf13/cobra"
 	"k8s.io/apimachinery/pkg/util/validation"
+	"sigs.k8s.io/yaml"
 )
-
-type templateConfig struct {
-	ControlPlaneNamespace string
-	ServiceNamespace      string
-	ServiceName           string
-	ClusterZone           string
-}
 
 type profileOptions struct {
 	name          string
@@ -24,21 +23,18 @@ type profileOptions struct {
 	template      bool
 	openAPI       string
 	proto         string
-	tap           string
-	tapDuration   time.Duration
-	tapRouteLimit uint
+	ignoreCluster bool
+	output        string
 }
 
 func newProfileOptions() *profileOptions {
 	return &profileOptions{
 		name:          "",
-		namespace:     "default",
 		template:      false,
 		openAPI:       "",
 		proto:         "",
-		tap:           "",
-		tapDuration:   5 * time.Second,
-		tapRouteLimit: 20,
+		ignoreCluster: false,
+		output:        "yaml",
 	}
 }
 
@@ -53,11 +49,8 @@ func (options *profileOptions) validate() error {
 	if options.proto != "" {
 		outputs++
 	}
-	if options.tap != "" {
-		outputs++
-	}
 	if outputs != 1 {
-		return errors.New("You must specify exactly one of --template or --open-api or --proto or --tap")
+		return errors.New("You must specify exactly one of --template or --open-api or --proto")
 	}
 
 	// a DNS-1035 label must consist of lower case alphanumeric characters or '-',
@@ -75,79 +68,96 @@ func (options *profileOptions) validate() error {
 	return nil
 }
 
-// NewCmdProfile creates a new cobra command for the Profile subcommand which
+// newCmdProfile creates a new cobra command for the Profile subcommand which
 // generates Linkerd service profiles.
 func newCmdProfile() *cobra.Command {
 	options := newProfileOptions()
 
 	cmd := &cobra.Command{
-		Use:   "profile [flags] (--template | --open-api file | --proto file | --tap resource) (SERVICE)",
+		Use:   "profile [flags] (--template | --open-api file | --proto file) (SERVICE)",
 		Short: "Output service profile config for Kubernetes",
-		Long: `Output service profile config for Kubernetes.
+		Long:  "Output service profile config for Kubernetes.",
+		Example: `  # Output a basic template to apply after modification.
+  linkerd profile -n emojivoto --template web-svc
 
-This outputs a service profile for the given service.
+  # Generate a profile from an OpenAPI specification.
+  linkerd profile -n emojivoto --open-api web-svc.swagger web-svc
 
-Examples:
-  If the --template flag is specified, it outputs a service profile template.
-  Edit the template and then apply it with kubectl to add a service profile to
-  a service:
-
-  linkerd profile -n emojivoto --template web-svc > web-svc-profile.yaml
-  # (edit web-svc-profile.yaml manually)
-  kubectl apply -f web-svc-profile.yaml
-
-  If the --open-api flag is specified, it reads the given OpenAPI
-  specification file and outputs a corresponding service profile:
-
-  linkerd profile -n emojivoto --open-api web-svc.swagger web-svc | kubectl apply -f -
-
-  If the --proto flag is specified, it reads the given protobuf definition file
-  and outputs a corresponding service profile:
-
-  linkerd profile -n emojivoto --proto Voting.proto vote-svc | kubectl apply -f -
-
-  If the --tap flag is specified, it runs linkerd tap target for --tap-duration seconds,
-  and creates a profile for the SERVICE based on the requests seen in that window:
-
-  linkerd profile books --tap deploy/books --tap-duration 10s --tap-route-limit 5 > book-svc-profile.yaml
-  # (edit book-svc-profile.yaml manually)
-  kubectl apply -f book-svc-profile.yaml
-
-  The command will run linkerd tap deploy/books for tap-duration seconds, and then create
-  a service profile for the books service with routes prepopulated from the tap data.
-  For high RPS, high-route-cardinality services, use tap-route-limit to limit the number of
-  routes in the output profile.`,
+  # Generate a profile from a protobuf definition.
+  linkerd profile -n emojivoto --proto Voting.proto vote-svc
+`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if options.namespace == "" {
+				options.namespace = pkgcmd.GetDefaultNamespace(kubeconfigPath, kubeContext)
+			}
 			options.name = args[0]
+			clusterDomain := defaultClusterDomain
 
 			err := options.validate()
 			if err != nil {
 				return err
 			}
+			// performs an online profile generation and access-check to k8s cluster to extract
+			// clusterDomain from linkerd configuration
+			if !options.ignoreCluster {
+				var err error
+				k8sAPI, err := k8s.NewAPI(kubeconfigPath, kubeContext, impersonate, impersonateGroup, 0)
 
-			if options.template {
-				return profiles.RenderProfileTemplate(options.namespace, options.name, os.Stdout)
-			} else if options.openAPI != "" {
-				return profiles.RenderOpenAPI(options.openAPI, options.namespace, options.name, os.Stdout)
-			} else if options.tap != "" {
-				return profiles.RenderTapOutputProfile(cliPublicAPIClient(), options.tap, options.namespace, options.name, options.tapDuration, int(options.tapRouteLimit), os.Stdout)
-			} else if options.proto != "" {
-				return profiles.RenderProto(options.proto, options.namespace, options.name, os.Stdout)
+				if err != nil {
+					return err
+				}
+
+				_, values, err := healthcheck.FetchCurrentConfiguration(cmd.Context(), k8sAPI, controlPlaneNamespace)
+				if err != nil {
+					return err
+				}
+
+				if cd := values.ClusterDomain; cd != "" {
+					clusterDomain = cd
+				}
 			}
 
-			// we should never get here
-			return errors.New("Unexpected error")
+			var profile *sp.ServiceProfile
+			if options.template {
+				return profiles.RenderProfileTemplate(options.namespace, options.name, clusterDomain, os.Stdout, options.output)
+			} else if options.openAPI != "" {
+				profile, err = profiles.RenderOpenAPI(options.openAPI, options.namespace, options.name, clusterDomain)
+			} else if options.proto != "" {
+				profile, err = profiles.RenderProto(options.proto, options.namespace, options.name, clusterDomain)
+			} else {
+				return errors.New("one of --template, --open-api, or --proto must be specified")
+			}
+			if err != nil {
+				return err
+			}
+
+			return writeProfile(profile, os.Stdout, options.output)
 		},
 	}
 
 	cmd.PersistentFlags().BoolVar(&options.template, "template", options.template, "Output a service profile template")
 	cmd.PersistentFlags().StringVar(&options.openAPI, "open-api", options.openAPI, "Output a service profile based on the given OpenAPI spec file")
-	cmd.PersistentFlags().StringVar(&options.tap, "tap", options.tap, "Output a service profile based on tap data for the given target resource")
-	cmd.PersistentFlags().DurationVar(&options.tapDuration, "tap-duration", options.tapDuration, "Duration over which tap data is collected (for example: \"10s\", \"1m\", \"10m\")")
-	cmd.PersistentFlags().UintVar(&options.tapRouteLimit, "tap-route-limit", options.tapRouteLimit, "Max number of routes to add to the profile")
 	cmd.PersistentFlags().StringVarP(&options.namespace, "namespace", "n", options.namespace, "Namespace of the service")
 	cmd.PersistentFlags().StringVar(&options.proto, "proto", options.proto, "Output a service profile based on the given Protobuf spec file")
-
+	cmd.PersistentFlags().BoolVar(&options.ignoreCluster, "ignore-cluster", options.ignoreCluster, "Output a service profile through offline generation")
+	cmd.PersistentFlags().StringVarP(&options.output, "output", "o", options.output, "Output format. One of: yaml, json")
 	return cmd
+}
+
+func writeProfile(profile *sp.ServiceProfile, w io.Writer, format string) error {
+	var output []byte
+	var err error
+	if format == yamlOutput {
+		output, err = yaml.Marshal(profile)
+	} else if format == jsonOutput {
+		output, err = json.Marshal(profile)
+	} else {
+		return fmt.Errorf("unknown output format: %s", format)
+	}
+	if err != nil {
+		return fmt.Errorf("Error writing Service Profile: %w", err)
+	}
+	_, err = w.Write(output)
+	return err
 }

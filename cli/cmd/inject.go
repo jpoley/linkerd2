@@ -2,69 +2,62 @@ package cmd
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
+	jsonpatch "github.com/evanphx/json-patch"
+	"github.com/linkerd/linkerd2/cli/flag"
+	"github.com/linkerd/linkerd2/pkg/charts/linkerd2"
 	"github.com/linkerd/linkerd2/pkg/healthcheck"
+	"github.com/linkerd/linkerd2/pkg/inject"
 	"github.com/linkerd/linkerd2/pkg/k8s"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
-	v1 "k8s.io/api/core/v1"
-	k8sMeta "k8s.io/apimachinery/pkg/api/meta"
-	k8sResource "k8s.io/apimachinery/pkg/api/resource"
-	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/yaml"
 )
 
 const (
-	// LocalhostDNSNameOverride allows override of the controlPlaneDNS. This
-	// must be in absolute form for the proxy to special-case it.
-	LocalhostDNSNameOverride = "localhost."
-	// ControlPlanePodName default control plane pod name.
-	ControlPlanePodName = "linkerd-controller"
-	// PodNamespaceEnvVarName is the name of the variable used to pass the pod's namespace.
-	PodNamespaceEnvVarName = "LINKERD2_PROXY_POD_NAMESPACE"
-
 	// for inject reports
-
-	hostNetworkDesc    = "pods do not use host networking"
-	sidecarDesc        = "pods do not have a 3rd party proxy or initContainer already injected"
-	injectDisabledDesc = "pods are not annotated to disable injection"
-	unsupportedDesc    = "at least one resource injected"
-	udpDesc            = "pod specs do not include UDP ports"
+	hostNetworkDesc                  = "pods do not use host networking"
+	sidecarDesc                      = "pods do not have a 3rd party proxy or initContainer already injected"
+	injectDisabledDesc               = "pods are not annotated to disable injection"
+	unsupportedDesc                  = "at least one resource can be injected or annotated"
+	udpDesc                          = "pod specs do not include UDP ports"
+	automountServiceAccountTokenDesc = "pods do not have automountServiceAccountToken set to \"false\" or service account token projection is enabled"
+	slash                            = "/"
 )
 
-type injectOptions struct {
-	*proxyConfigOptions
+type resourceTransformerInject struct {
+	allowNsInject       bool
+	injectProxy         bool
+	values              *linkerd2.Values
+	overrideAnnotations map[string]string
+	enableDebugSidecar  bool
+	closeWaitTimeout    time.Duration
+	overrider           inject.ValueOverrider
 }
 
-type resourceTransformerInject struct{}
-
-// InjectYAML processes resource definitions and outputs them after injection in out
-func InjectYAML(in io.Reader, out io.Writer, report io.Writer, options *injectOptions) error {
-	return ProcessYAML(in, out, report, options, resourceTransformerInject{})
+func runInjectCmd(inputs []io.Reader, errWriter, outWriter io.Writer, transformer *resourceTransformerInject, output string) int {
+	return transformInput(inputs, errWriter, outWriter, transformer, output)
 }
 
-func runInjectCmd(inputs []io.Reader, errWriter, outWriter io.Writer, options *injectOptions) int {
-	return transformInput(inputs, errWriter, outWriter, options, resourceTransformerInject{})
-}
-
-// objMeta provides a generic struct to parse the names of Kubernetes objects
-type objMeta struct {
-	metaV1.ObjectMeta `json:"metadata,omitempty" protobuf:"bytes,1,opt,name=metadata"`
-}
-
-func newInjectOptions() *injectOptions {
-	return &injectOptions{
-		proxyConfigOptions: newProxyConfigOptions(),
+func NewCmdInject(overrider inject.ValueOverrider) *cobra.Command {
+	defaults, err := linkerd2.NewValues()
+	if err != nil {
+		fmt.Fprint(os.Stderr, err.Error())
+		os.Exit(1)
 	}
-}
-
-func newCmdInject() *cobra.Command {
-	options := newInjectOptions()
+	flags, proxyFlagSet := makeProxyFlags(defaults)
+	injectFlags, injectFlagSet := makeInjectFlags(defaults)
+	var manualOption, enableDebugSidecar bool
+	var closeWaitTimeout time.Duration
+	var output string
 
 	cmd := &cobra.Command{
 		Use:   "inject [flags] CONFIG-FILE",
@@ -76,18 +69,30 @@ sub-folders, or coming from stdin.`,
 		Example: `  # Inject all the deployments in the default namespace.
   kubectl get deploy -o yaml | linkerd inject - | kubectl apply -f -
 
-  # Download a resource and inject it through stdin.
-  curl http://url.to/yml | linkerd inject - | kubectl apply -f -
+  # Injecting a file from a remote URL
+  linkerd inject https://url.to/yml | kubectl apply -f -
 
   # Inject all the resources inside a folder and its sub-folders.
   linkerd inject <folder> | kubectl apply -f -`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-
 			if len(args) < 1 {
 				return fmt.Errorf("please specify a kubernetes resource file")
 			}
 
-			if err := options.validate(); err != nil {
+			values := defaults
+			if !ignoreCluster {
+				values, err = fetchConfigs(cmd.Context())
+				if err != nil {
+					return err
+				}
+			}
+
+			baseValues, err := values.DeepCopy()
+			if err != nil {
+				return err
+			}
+			err = flag.ApplySetFlags(values, append(flags, injectFlags...))
+			if err != nil {
 				return err
 			}
 
@@ -96,340 +101,182 @@ sub-folders, or coming from stdin.`,
 				return err
 			}
 
-			exitCode := uninjectAndInject(in, stderr, stdout, options)
+			overrideAnnotations := getOverrideAnnotations(values, baseValues)
+
+			transformer := &resourceTransformerInject{
+				allowNsInject:       true,
+				injectProxy:         manualOption,
+				values:              values,
+				overrideAnnotations: overrideAnnotations,
+				enableDebugSidecar:  enableDebugSidecar,
+				closeWaitTimeout:    closeWaitTimeout,
+				overrider:           overrider,
+			}
+			exitCode := uninjectAndInject(in, stderr, stdout, transformer, output)
 			os.Exit(exitCode)
 			return nil
 		},
 	}
 
-	addProxyConfigFlags(cmd, options.proxyConfigOptions)
+	cmd.Flags().BoolVar(
+		&manualOption, "manual", manualOption,
+		"Include the proxy sidecar container spec in the YAML output (the auto-injector won't pick it up, so config annotations aren't supported) (default false)",
+	)
+
+	cmd.Flags().BoolVar(
+		&ignoreCluster, "ignore-cluster", false,
+		"Ignore the current Kubernetes cluster when checking for existing cluster configuration (default false)",
+	)
+
+	cmd.Flags().BoolVar(&enableDebugSidecar, "enable-debug-sidecar", enableDebugSidecar,
+		"Inject a debug sidecar for data plane debugging")
+
+	cmd.Flags().DurationVar(
+		&closeWaitTimeout, "close-wait-timeout", closeWaitTimeout,
+		"Sets nf_conntrack_tcp_timeout_close_wait")
+
+	cmd.Flags().StringVarP(&output, "output", "o", "yaml", "Output format, one of: json|yaml")
+
+	cmd.Flags().AddFlagSet(proxyFlagSet)
+	cmd.Flags().AddFlagSet(injectFlagSet)
 
 	return cmd
 }
 
-func uninjectAndInject(inputs []io.Reader, errWriter, outWriter io.Writer, options *injectOptions) int {
+func uninjectAndInject(inputs []io.Reader, errWriter, outWriter io.Writer, transformer *resourceTransformerInject, output string) int {
 	var out bytes.Buffer
-	if exitCode := runUninjectSilentCmd(inputs, errWriter, &out, nil); exitCode != 0 {
+	if exitCode := runUninjectSilentCmd(inputs, errWriter, &out, transformer.values, "yaml"); exitCode != 0 {
 		return exitCode
 	}
-	return runInjectCmd([]io.Reader{&out}, errWriter, outWriter, options)
+	return runInjectCmd([]io.Reader{&out}, errWriter, outWriter, transformer, output)
 }
 
-/* Given a ObjectMeta, update ObjectMeta in place with the new labels and
- * annotations.
- */
-func injectObjectMeta(t *metaV1.ObjectMeta, k8sLabels map[string]string, options *injectOptions, report *injectReport) bool {
-	report.injectDisabled = injectDisabled(t)
-	if report.injectDisabled {
-		return false
+func (rt resourceTransformerInject) transform(bytes []byte) ([]byte, []inject.Report, error) {
+	conf := inject.NewResourceConfig(rt.values, inject.OriginCLI, controlPlaneNamespace)
+
+	if rt.enableDebugSidecar {
+		conf.AppendPodAnnotation(k8s.ProxyEnableDebugAnnotation, "true")
 	}
 
-	if t.Annotations == nil {
-		t.Annotations = make(map[string]string)
-	}
-	t.Annotations[k8s.CreatedByAnnotation] = k8s.CreatedByAnnotationValue()
-	t.Annotations[k8s.ProxyVersionAnnotation] = options.linkerdVersion
-
-	if t.Labels == nil {
-		t.Labels = make(map[string]string)
-	}
-	t.Labels[k8s.ControllerNSLabel] = controlPlaneNamespace
-	for k, v := range k8sLabels {
-		t.Labels[k] = v
+	if rt.closeWaitTimeout != time.Duration(0) {
+		conf.AppendPodAnnotation(k8s.CloseWaitTimeoutAnnotation, rt.closeWaitTimeout.String())
 	}
 
-	return true
+	report, err := conf.ParseMetaAndYAML(bytes)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if conf.IsControlPlaneComponent() && !rt.injectProxy {
+		return nil, nil, errors.New("--manual must be set when injecting control plane components")
+	}
+
+	if conf.IsService() {
+		opaquePorts, ok := rt.overrideAnnotations[k8s.ProxyOpaquePortsAnnotation]
+		if ok {
+			annotations := map[string]string{k8s.ProxyOpaquePortsAnnotation: opaquePorts}
+			bytes, err = conf.AnnotateService(annotations)
+			report.Annotated = true
+		}
+		return bytes, []inject.Report{*report}, err
+	}
+	if rt.allowNsInject && conf.IsNamespace() {
+		bytes, err = conf.AnnotateNamespace(rt.overrideAnnotations)
+		report.Annotated = true
+		return bytes, []inject.Report{*report}, err
+	}
+	if conf.HasPodTemplate() && len(rt.overrideAnnotations) > 0 {
+		conf.AppendPodAnnotations(rt.overrideAnnotations)
+		report.Annotated = true
+	}
+
+	if ok, _ := report.Injectable(); !ok {
+		if errs := report.ThrowInjectError(); len(errs) > 0 {
+			return bytes, []inject.Report{*report}, fmt.Errorf("failed to inject %s%s%s: %w", report.Kind, slash, report.Name, concatErrors(errs, ", "))
+		}
+		return bytes, []inject.Report{*report}, nil
+	}
+
+	if rt.injectProxy {
+		// delete the inject annotation if present as its not needed in the manual case
+		// prevents injector from taking a different code path in the ingress mode
+		delete(rt.overrideAnnotations, k8s.ProxyInjectAnnotation)
+		conf.AppendPodAnnotation(k8s.CreatedByAnnotation, k8s.CreatedByAnnotationValue())
+	} else if !rt.values.Proxy.IsIngress { // Add enabled annotation only if its not ingress mode to prevent overriding the annotation
+		// flag the auto-injector to inject the proxy, regardless of the namespace annotation
+		conf.AppendPodAnnotation(k8s.ProxyInjectAnnotation, k8s.ProxyInjectEnabled)
+	}
+
+	patchJSON, err := conf.GetPodPatch(rt.injectProxy, rt.overrider)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if len(patchJSON) == 0 {
+		return bytes, []inject.Report{*report}, nil
+	}
+	log.Infof("patch generated for: %s", report.ResName())
+	log.Debugf("patch: %s", patchJSON)
+	patch, err := jsonpatch.DecodePatch(patchJSON)
+	if err != nil {
+		return nil, nil, err
+	}
+	origJSON, err := yaml.YAMLToJSON(bytes)
+	if err != nil {
+		return nil, nil, err
+	}
+	injectedJSON, err := patch.Apply(origJSON)
+	if err != nil {
+		return nil, nil, err
+	}
+	injectedYAML, err := conf.JSONToYAML(injectedJSON)
+	if err != nil {
+		return nil, nil, err
+	}
+	return injectedYAML, []inject.Report{*report}, nil
 }
 
-/* Given a PodSpec, update the PodSpec in place with the sidecar
- * and init-container injected. If the pod is unsuitable for having them
- * injected, return false.
- */
-func injectPodSpec(t *v1.PodSpec, identity k8s.TLSIdentity, controlPlaneDNSNameOverride string, options *injectOptions, report *injectReport) bool {
-	report.hostNetwork = t.HostNetwork
-	report.sidecar = healthcheck.HasExistingSidecars(t)
-	report.udp = checkUDPPorts(t)
-
-	// Skip injection if:
-	// 1) Pods with `hostNetwork: true` share a network namespace with the host.
-	//    The init-container would destroy the iptables configuration on the host.
-	// OR
-	// 2) Known 3rd party sidecars already present.
-	if report.hostNetwork || report.sidecar {
-		return false
-	}
-
-	f := false
-	inboundSkipPorts := append(options.ignoreInboundPorts, options.proxyControlPort, options.proxyMetricsPort)
-	inboundSkipPortsStr := make([]string, len(inboundSkipPorts))
-	for i, p := range inboundSkipPorts {
-		inboundSkipPortsStr[i] = strconv.Itoa(int(p))
-	}
-
-	outboundSkipPortsStr := make([]string, len(options.ignoreOutboundPorts))
-	for i, p := range options.ignoreOutboundPorts {
-		outboundSkipPortsStr[i] = strconv.Itoa(int(p))
-	}
-
-	initArgs := []string{
-		"--incoming-proxy-port", fmt.Sprintf("%d", options.inboundPort),
-		"--outgoing-proxy-port", fmt.Sprintf("%d", options.outboundPort),
-		"--proxy-uid", fmt.Sprintf("%d", options.proxyUID),
-	}
-
-	if len(inboundSkipPortsStr) > 0 {
-		initArgs = append(initArgs, "--inbound-ports-to-ignore")
-		initArgs = append(initArgs, strings.Join(inboundSkipPortsStr, ","))
-	}
-
-	if len(outboundSkipPortsStr) > 0 {
-		initArgs = append(initArgs, "--outbound-ports-to-ignore")
-		initArgs = append(initArgs, strings.Join(outboundSkipPortsStr, ","))
-	}
-
-	controlPlaneDNS := fmt.Sprintf("linkerd-proxy-api.%s.svc.cluster.local", controlPlaneNamespace)
-	if controlPlaneDNSNameOverride != "" {
-		controlPlaneDNS = controlPlaneDNSNameOverride
-	}
-
-	metricsPort := intstr.IntOrString{
-		IntVal: int32(options.proxyMetricsPort),
-	}
-
-	proxyProbe := v1.Probe{
-		Handler: v1.Handler{
-			HTTPGet: &v1.HTTPGetAction{
-				Path: "/metrics",
-				Port: metricsPort,
-			},
-		},
-		InitialDelaySeconds: 10,
-	}
-
-	resources := v1.ResourceRequirements{
-		Requests: v1.ResourceList{},
-	}
-
-	if options.proxyCPURequest != "" {
-		resources.Requests["cpu"] = k8sResource.MustParse(options.proxyCPURequest)
-	}
-
-	if options.proxyMemoryRequest != "" {
-		resources.Requests["memory"] = k8sResource.MustParse(options.proxyMemoryRequest)
-	}
-
-	profileSuffixes := "."
-	if options.disableExternalProfiles {
-		profileSuffixes = "svc.cluster.local."
-	}
-	sidecar := v1.Container{
-		Name:                     k8s.ProxyContainerName,
-		Image:                    options.taggedProxyImage(),
-		ImagePullPolicy:          v1.PullPolicy(options.imagePullPolicy),
-		TerminationMessagePolicy: v1.TerminationMessageFallbackToLogsOnError,
-		SecurityContext: &v1.SecurityContext{
-			RunAsUser: &options.proxyUID,
-		},
-		Ports: []v1.ContainerPort{
-			{
-				Name:          "linkerd-proxy",
-				ContainerPort: int32(options.inboundPort),
-			},
-			{
-				Name:          "linkerd-metrics",
-				ContainerPort: int32(options.proxyMetricsPort),
-			},
-		},
-		Resources: resources,
-		Env: []v1.EnvVar{
-			{Name: "LINKERD2_PROXY_LOG", Value: options.proxyLogLevel},
-			{
-				Name:  "LINKERD2_PROXY_CONTROL_URL",
-				Value: fmt.Sprintf("tcp://%s:%d", controlPlaneDNS, options.proxyAPIPort),
-			},
-			{Name: "LINKERD2_PROXY_CONTROL_LISTENER", Value: fmt.Sprintf("tcp://0.0.0.0:%d", options.proxyControlPort)},
-			{Name: "LINKERD2_PROXY_METRICS_LISTENER", Value: fmt.Sprintf("tcp://0.0.0.0:%d", options.proxyMetricsPort)},
-			{Name: "LINKERD2_PROXY_OUTBOUND_LISTENER", Value: fmt.Sprintf("tcp://127.0.0.1:%d", options.outboundPort)},
-			{Name: "LINKERD2_PROXY_INBOUND_LISTENER", Value: fmt.Sprintf("tcp://0.0.0.0:%d", options.inboundPort)},
-			{Name: "LINKERD2_PROXY_DESTINATION_PROFILE_SUFFIXES", Value: profileSuffixes},
-			{
-				Name:      PodNamespaceEnvVarName,
-				ValueFrom: &v1.EnvVarSource{FieldRef: &v1.ObjectFieldSelector{FieldPath: "metadata.namespace"}},
-			},
-			{Name: "LINKERD2_PROXY_INBOUND_ACCEPT_KEEPALIVE", Value: fmt.Sprintf("%dms", defaultKeepaliveMs)},
-			{Name: "LINKERD2_PROXY_OUTBOUND_CONNECT_KEEPALIVE", Value: fmt.Sprintf("%dms", defaultKeepaliveMs)},
-			{Name: "LINKERD2_PROXY_ID", Value: identity.ToDNSName()},
-		},
-		LivenessProbe:  &proxyProbe,
-		ReadinessProbe: &proxyProbe,
-	}
-
-	// Special case if the caller specifies that
-	// LINKERD2_PROXY_OUTBOUND_ROUTER_CAPACITY be set on the pod.
-	// We key off of any container image in the pod. Ideally we would instead key
-	// off of something at the top-level of the PodSpec, but there is nothing
-	// easily identifiable at that level.
-	// This is currently only used by the Prometheus pod in the control-plane.
-	for _, container := range t.Containers {
-		if capacity, ok := options.proxyOutboundCapacity[container.Image]; ok {
-			sidecar.Env = append(sidecar.Env,
-				v1.EnvVar{
-					Name:  "LINKERD2_PROXY_OUTBOUND_ROUTER_CAPACITY",
-					Value: fmt.Sprintf("%d", capacity),
-				},
-			)
-			break
-		}
-	}
-
-	if options.enableTLS() {
-		yes := true
-
-		configMapVolume := v1.Volume{
-			Name: k8s.TLSTrustAnchorVolumeName,
-			VolumeSource: v1.VolumeSource{
-				ConfigMap: &v1.ConfigMapVolumeSource{
-					LocalObjectReference: v1.LocalObjectReference{Name: k8s.TLSTrustAnchorConfigMapName},
-					Optional:             &yes,
-				},
-			},
-		}
-		secretVolume := v1.Volume{
-			Name: k8s.TLSSecretsVolumeName,
-			VolumeSource: v1.VolumeSource{
-				Secret: &v1.SecretVolumeSource{
-					SecretName: identity.ToSecretName(),
-					Optional:   &yes,
-				},
-			},
-		}
-
-		base := "/var/linkerd-io"
-		configMapBase := base + "/trust-anchors"
-		secretBase := base + "/identity"
-		tlsEnvVars := []v1.EnvVar{
-			{Name: "LINKERD2_PROXY_TLS_TRUST_ANCHORS", Value: configMapBase + "/" + k8s.TLSTrustAnchorFileName},
-			{Name: "LINKERD2_PROXY_TLS_CERT", Value: secretBase + "/" + k8s.TLSCertFileName},
-			{Name: "LINKERD2_PROXY_TLS_PRIVATE_KEY", Value: secretBase + "/" + k8s.TLSPrivateKeyFileName},
-			{
-				Name:  "LINKERD2_PROXY_TLS_POD_IDENTITY",
-				Value: identity.ToDNSName(),
-			},
-			{Name: "LINKERD2_PROXY_CONTROLLER_NAMESPACE", Value: controlPlaneNamespace},
-			{Name: "LINKERD2_PROXY_TLS_CONTROLLER_IDENTITY", Value: identity.ToControllerIdentity().ToDNSName()},
-		}
-
-		sidecar.Env = append(sidecar.Env, tlsEnvVars...)
-		sidecar.VolumeMounts = []v1.VolumeMount{
-			{Name: configMapVolume.Name, MountPath: configMapBase, ReadOnly: true},
-			{Name: secretVolume.Name, MountPath: secretBase, ReadOnly: true},
-		}
-
-		t.Volumes = append(t.Volumes, configMapVolume, secretVolume)
-	}
-
-	t.Containers = append(t.Containers, sidecar)
-	if !options.noInitContainer {
-		nonRoot := false
-		runAsUser := int64(0)
-		initContainer := v1.Container{
-			Name:                     k8s.InitContainerName,
-			Image:                    options.taggedProxyInitImage(),
-			ImagePullPolicy:          v1.PullPolicy(options.imagePullPolicy),
-			TerminationMessagePolicy: v1.TerminationMessageFallbackToLogsOnError,
-			Args: initArgs,
-			SecurityContext: &v1.SecurityContext{
-				Capabilities: &v1.Capabilities{
-					Add: []v1.Capability{v1.Capability("NET_ADMIN")},
-				},
-				Privileged:   &f,
-				RunAsNonRoot: &nonRoot,
-				RunAsUser:    &runAsUser,
-			},
-		}
-		t.InitContainers = append(t.InitContainers, initContainer)
-	}
-
-	return true
-}
-
-func (rt resourceTransformerInject) transform(bytes []byte, options *injectOptions) ([]byte, []injectReport, error) {
-	conf := &resourceConfig{}
-	output, reports, err := conf.parse(bytes, options, rt)
-	if output != nil || err != nil {
-		return output, reports, err
-	}
-
-	report := injectReport{
-		kind: strings.ToLower(conf.meta.Kind),
-		name: conf.om.Name,
-	}
-
-	// If we don't inject anything into the pod template then output the
-	// original serialization of the original object. Otherwise, output the
-	// serialization of the modified object.
-	output = bytes
-	if conf.podSpec != nil {
-		metaAccessor, err := k8sMeta.Accessor(conf.obj)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		// The namespace isn't necessarily in the input so it has to be substituted
-		// at runtime. The proxy recognizes the "$NAME" syntax for this variable
-		// but not necessarily other variables.
-		identity := k8s.TLSIdentity{
-			Name:                metaAccessor.GetName(),
-			Kind:                strings.ToLower(conf.meta.Kind),
-			Namespace:           "$" + PodNamespaceEnvVarName,
-			ControllerNamespace: controlPlaneNamespace,
-		}
-
-		if injectPodSpec(conf.podSpec, identity, conf.dnsNameOverride, options, &report) &&
-			injectObjectMeta(conf.objectMeta, conf.k8sLabels, options, &report) {
-			var err error
-			output, err = yaml.Marshal(conf.obj)
-			if err != nil {
-				return nil, nil, err
-			}
-		}
-	} else {
-		report.unsupportedResource = true
-	}
-
-	return output, []injectReport{report}, nil
-}
-
-func (resourceTransformerInject) generateReport(injectReports []injectReport, output io.Writer) {
-	injected := []injectReport{}
+func (resourceTransformerInject) generateReport(reports []inject.Report, output io.Writer) {
+	injected := []inject.Report{}
+	annotatable := false
 	hostNetwork := []string{}
 	sidecar := []string{}
 	udp := []string{}
 	injectDisabled := []string{}
+	automountServiceAccountTokenFalse := []string{}
 	warningsPrinted := verbose
 
-	for _, r := range injectReports {
-		if !r.hostNetwork && !r.sidecar && !r.unsupportedResource && !r.injectDisabled {
+	for _, r := range reports {
+		if b, _ := r.Injectable(); b {
 			injected = append(injected, r)
 		}
 
-		if r.hostNetwork {
-			hostNetwork = append(hostNetwork, r.resName())
+		if r.IsAnnotatable() {
+			annotatable = true
+		}
+
+		if r.HostNetwork {
+			hostNetwork = append(hostNetwork, r.ResName())
 			warningsPrinted = true
 		}
 
-		if r.sidecar {
-			sidecar = append(sidecar, r.resName())
+		if r.Sidecar {
+			sidecar = append(sidecar, r.ResName())
 			warningsPrinted = true
 		}
 
-		if r.udp {
-			udp = append(udp, r.resName())
+		if r.UDP {
+			udp = append(udp, r.ResName())
 			warningsPrinted = true
 		}
 
-		if r.injectDisabled {
-			injectDisabled = append(injectDisabled, r.resName())
+		if r.InjectDisabled {
+			injectDisabled = append(injectDisabled, r.ResName())
+			warningsPrinted = true
+		}
+
+		if !r.AutomountServiceAccountToken {
+			automountServiceAccountTokenFalse = append(automountServiceAccountTokenFalse, r.ResName())
 			warningsPrinted = true
 		}
 	}
@@ -438,7 +285,7 @@ func (resourceTransformerInject) generateReport(injectReports []injectReport, ou
 	// Warnings
 	//
 
-	// leading newline to separate from yaml output on stdout
+	// Leading newline to separate from yaml output on stdout
 	output.Write([]byte("\n"))
 
 	if len(hostNetwork) > 0 {
@@ -460,7 +307,7 @@ func (resourceTransformerInject) generateReport(injectReports []injectReport, ou
 		output.Write([]byte(fmt.Sprintf("%s %s\n", okStatus, injectDisabledDesc)))
 	}
 
-	if len(injected) == 0 {
+	if len(injected) == 0 && !annotatable {
 		output.Write([]byte(fmt.Sprintf("%s no supported objects found\n", warnStatus)))
 		warningsPrinted = true
 	} else if verbose {
@@ -477,6 +324,10 @@ func (resourceTransformerInject) generateReport(injectReports []injectReport, ou
 		output.Write([]byte(fmt.Sprintf("%s %s\n", okStatus, udpDesc)))
 	}
 
+	if len(automountServiceAccountTokenFalse) == 0 && verbose {
+		output.Write([]byte(fmt.Sprintf("%s %s\n", okStatus, automountServiceAccountTokenDesc)))
+	}
+
 	//
 	// Summary
 	//
@@ -484,30 +335,175 @@ func (resourceTransformerInject) generateReport(injectReports []injectReport, ou
 		output.Write([]byte("\n"))
 	}
 
-	for _, r := range injectReports {
-		if !r.hostNetwork && !r.sidecar && !r.unsupportedResource && !r.injectDisabled {
-			output.Write([]byte(fmt.Sprintf("%s \"%s\" injected\n", r.kind, r.name)))
-		} else {
-			output.Write([]byte(fmt.Sprintf("%s \"%s\" skipped\n", r.kind, r.name)))
+	for _, r := range reports {
+		ok, _ := r.Injectable()
+		if ok {
+			output.Write([]byte(fmt.Sprintf("%s \"%s\" injected\n", r.Kind, r.Name)))
+		}
+		if !ok && !r.Annotated {
+			if r.Kind != "" {
+				output.Write([]byte(fmt.Sprintf("%s \"%s\" skipped\n", r.Kind, r.Name)))
+			} else {
+				output.Write([]byte(fmt.Sprintln("document missing \"kind\" field, skipped")))
+			}
+		}
+		if !ok && r.Annotated {
+			output.Write([]byte(fmt.Sprintf("%s \"%s\" annotated\n", r.Kind, r.Name)))
 		}
 	}
 
-	// trailing newline to separate from kubectl output if piping
+	// Trailing newline to separate from kubectl output if piping
 	output.Write([]byte("\n"))
 }
 
-func checkUDPPorts(t *v1.PodSpec) bool {
-	// check for ports with `protocol: UDP`, which will not be routed by Linkerd
-	for _, container := range t.Containers {
-		for _, port := range container.Ports {
-			if port.Protocol == v1.ProtocolUDP {
-				return true
-			}
-		}
+func fetchConfigs(ctx context.Context) (*linkerd2.Values, error) {
+
+	hc := healthcheck.NewWithCoreChecks(&healthcheck.Options{
+		ControlPlaneNamespace: controlPlaneNamespace,
+		KubeConfig:            kubeconfigPath,
+		Impersonate:           impersonate,
+		ImpersonateGroup:      impersonateGroup,
+		KubeContext:           kubeContext,
+		APIAddr:               apiAddr,
+		RetryDeadline:         time.Time{},
+	})
+	hc.RunWithExitOnError()
+
+	api, err := k8s.NewAPI(kubeconfigPath, kubeContext, impersonate, impersonateGroup, 0)
+	if err != nil {
+		return nil, err
 	}
-	return false
+
+	// Get the New Linkerd Configuration
+	_, values, err := healthcheck.FetchCurrentConfiguration(ctx, api, controlPlaneNamespace)
+	return values, err
 }
 
-func injectDisabled(t *metaV1.ObjectMeta) bool {
-	return t.GetAnnotations()[k8s.ProxyInjectAnnotation] == k8s.ProxyInjectDisabled
+// getOverrideAnnotations uses command-line overrides to update the provided configs.
+// the overrideAnnotations map keeps track of which configs are overridden, by
+// storing the corresponding annotations and values.
+func getOverrideAnnotations(values *linkerd2.Values, base *linkerd2.Values) map[string]string {
+	overrideAnnotations := make(map[string]string)
+
+	proxy := values.Proxy
+	baseProxy := base.Proxy
+	if proxy.Image.Version != baseProxy.Image.Version {
+		overrideAnnotations[k8s.ProxyVersionOverrideAnnotation] = proxy.Image.Version
+	}
+
+	if values.ProxyInit.IgnoreInboundPorts != base.ProxyInit.IgnoreInboundPorts {
+		overrideAnnotations[k8s.ProxyIgnoreInboundPortsAnnotation] = values.ProxyInit.IgnoreInboundPorts
+	}
+	if values.ProxyInit.IgnoreOutboundPorts != base.ProxyInit.IgnoreOutboundPorts {
+		overrideAnnotations[k8s.ProxyIgnoreOutboundPortsAnnotation] = values.ProxyInit.IgnoreOutboundPorts
+	}
+
+	if proxy.Ports.Admin != baseProxy.Ports.Admin {
+		overrideAnnotations[k8s.ProxyAdminPortAnnotation] = fmt.Sprintf("%d", proxy.Ports.Admin)
+	}
+	if proxy.Ports.Control != baseProxy.Ports.Control {
+		overrideAnnotations[k8s.ProxyControlPortAnnotation] = fmt.Sprintf("%d", proxy.Ports.Control)
+	}
+	if proxy.Ports.Inbound != baseProxy.Ports.Inbound {
+		overrideAnnotations[k8s.ProxyInboundPortAnnotation] = fmt.Sprintf("%d", proxy.Ports.Inbound)
+	}
+	if proxy.Ports.Outbound != baseProxy.Ports.Outbound {
+		overrideAnnotations[k8s.ProxyOutboundPortAnnotation] = fmt.Sprintf("%d", proxy.Ports.Outbound)
+	}
+	if proxy.OpaquePorts != baseProxy.OpaquePorts {
+		overrideAnnotations[k8s.ProxyOpaquePortsAnnotation] = proxy.OpaquePorts
+	}
+
+	if proxy.Image.Name != baseProxy.Image.Name {
+		overrideAnnotations[k8s.ProxyImageAnnotation] = proxy.Image.Name
+	}
+	if values.DebugContainer.Image.Name != base.DebugContainer.Image.Name {
+		overrideAnnotations[k8s.DebugImageAnnotation] = values.DebugContainer.Image.Name
+	}
+
+	if values.DebugContainer.Image.Version != base.DebugContainer.Image.Version {
+		overrideAnnotations[k8s.DebugImageVersionAnnotation] = values.DebugContainer.Image.Version
+	}
+
+	if proxy.Image.PullPolicy != baseProxy.Image.PullPolicy {
+		overrideAnnotations[k8s.ProxyImagePullPolicyAnnotation] = proxy.Image.PullPolicy
+	}
+
+	if proxy.UID != baseProxy.UID {
+		overrideAnnotations[k8s.ProxyUIDAnnotation] = strconv.FormatInt(proxy.UID, 10)
+	}
+
+	if proxy.GID >= 0 && (baseProxy.GID < 0 || proxy.GID != baseProxy.GID) {
+		overrideAnnotations[k8s.ProxyGIDAnnotation] = strconv.FormatInt(proxy.GID, 10)
+	}
+
+	if proxy.LogLevel != baseProxy.LogLevel {
+		overrideAnnotations[k8s.ProxyLogLevelAnnotation] = proxy.LogLevel
+	}
+
+	if proxy.LogFormat != baseProxy.LogFormat {
+		overrideAnnotations[k8s.ProxyLogFormatAnnotation] = proxy.LogFormat
+	}
+
+	if proxy.RequireIdentityOnInboundPorts != baseProxy.RequireIdentityOnInboundPorts {
+		overrideAnnotations[k8s.ProxyRequireIdentityOnInboundPortsAnnotation] = proxy.RequireIdentityOnInboundPorts
+	}
+
+	if proxy.EnableExternalProfiles != baseProxy.EnableExternalProfiles {
+		overrideAnnotations[k8s.ProxyEnableExternalProfilesAnnotation] = strconv.FormatBool(proxy.EnableExternalProfiles)
+	}
+
+	if proxy.Metrics.HostnameLabels != baseProxy.Metrics.HostnameLabels {
+		overrideAnnotations[k8s.ProxyEnableHostnameLabels] = strconv.FormatBool(proxy.Metrics.HostnameLabels)
+	}
+
+	if proxy.IsIngress != baseProxy.IsIngress {
+		overrideAnnotations[k8s.ProxyInjectAnnotation] = k8s.ProxyInjectIngress
+	}
+
+	if proxy.Resources.CPU.Request != baseProxy.Resources.CPU.Request {
+		overrideAnnotations[k8s.ProxyCPURequestAnnotation] = proxy.Resources.CPU.Request
+	}
+	if proxy.Resources.CPU.Limit != baseProxy.Resources.CPU.Limit {
+		overrideAnnotations[k8s.ProxyCPULimitAnnotation] = proxy.Resources.CPU.Limit
+	}
+	if proxy.Resources.Memory.Request != baseProxy.Resources.Memory.Request {
+		overrideAnnotations[k8s.ProxyMemoryRequestAnnotation] = proxy.Resources.Memory.Request
+	}
+	if proxy.Resources.Memory.Limit != baseProxy.Resources.Memory.Limit {
+		overrideAnnotations[k8s.ProxyMemoryLimitAnnotation] = proxy.Resources.Memory.Limit
+	}
+	if proxy.WaitBeforeExitSeconds != baseProxy.WaitBeforeExitSeconds {
+		overrideAnnotations[k8s.ProxyWaitBeforeExitSecondsAnnotation] = uintToString(proxy.WaitBeforeExitSeconds)
+	}
+
+	if proxy.Await != baseProxy.Await {
+		if proxy.Await {
+			overrideAnnotations[k8s.ProxyAwait] = k8s.Enabled
+		} else {
+			overrideAnnotations[k8s.ProxyAwait] = k8s.Disabled
+		}
+	}
+
+	if proxy.DefaultInboundPolicy != baseProxy.DefaultInboundPolicy {
+		overrideAnnotations[k8s.ProxyDefaultInboundPolicyAnnotation] = proxy.DefaultInboundPolicy
+	}
+
+	if proxy.AccessLog != baseProxy.AccessLog {
+		overrideAnnotations[k8s.ProxyAccessLogAnnotation] = proxy.AccessLog
+	}
+
+	if proxy.ShutdownGracePeriod != baseProxy.ShutdownGracePeriod {
+		overrideAnnotations[k8s.ProxyShutdownGracePeriodAnnotation] = proxy.ShutdownGracePeriod
+	}
+
+	if proxy.NativeSidecar != baseProxy.NativeSidecar {
+		overrideAnnotations[k8s.ProxyEnableNativeSidecarAnnotationBeta] = strconv.FormatBool(proxy.NativeSidecar)
+	}
+
+	return overrideAnnotations
+}
+
+func uintToString(v uint64) string {
+	return strconv.FormatUint(v, 10)
 }
